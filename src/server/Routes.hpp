@@ -1,0 +1,17 @@
+#pragma once
+
+namespace httplib { class Server; }
+
+namespace avacli {
+
+struct ServerContext;
+
+void registerAuthRoutes(httplib::Server& svr, ServerContext ctx);
+void registerChatRoutes(httplib::Server& svr, ServerContext ctx);
+void registerFileRoutes(httplib::Server& svr, ServerContext ctx);
+void registerToolRoutes(httplib::Server& svr, ServerContext ctx);
+void registerDataRoutes(httplib::Server& svr, ServerContext ctx);
+void registerSettingsRoutes(httplib::Server& svr, ServerContext ctx);
+void registerInfraRoutes(httplib::Server& svr, ServerContext ctx);
+
+} // namespace avacli

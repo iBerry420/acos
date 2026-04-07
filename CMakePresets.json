@@ -1,0 +1,40 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 22,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "macos",
+      "displayName": "macOS or Linux (Ninja, Release)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/macos",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "windows-vcpkg",
+      "displayName": "Windows (vcpkg x64)",
+      "binaryDir": "${sourceDir}/build/windows-vcpkg",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "macos",
+      "configurePreset": "macos"
+    },
+    {
+      "name": "windows-vcpkg",
+      "configurePreset": "windows-vcpkg",
+      "configuration": "Release"
+    }
+  ]
+}

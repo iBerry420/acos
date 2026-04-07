@@ -1,0 +1,40 @@
+# CMake / build
+build/
+cmake-build-*/
+out/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+_deps/
+/Makefile
+*.ninja
+.ninja_deps
+.ninja_log
+
+# Compiled
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+avacli
+avalynnai
+
+# Editor / OS
+.cache/
+.clangd
+*.swp
+*.swo
+*~
+.DS_Store
+*.user
+.idea/
+.vscode/
+
+# Distribution artefacts
+dist/
+
+# Agent backups
+*.bak
