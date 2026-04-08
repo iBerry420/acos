@@ -22,9 +22,13 @@ public:
     nlohmann::json getInstance(const std::string& instanceId);
     nlohmann::json createInstance(const std::string& region, const std::string& plan,
                                   const std::string& osId, const std::string& label = "",
-                                  const std::string& startupScript = "");
+                                  const std::string& startupScriptId = "",
+                                  const std::string& userDataPlain = "");
     bool destroyInstance(const std::string& instanceId);
     nlohmann::json listOSImages();
+    nlohmann::json getAccount();
+    nlohmann::json getAccountBandwidth();
+    nlohmann::json listPendingCharges();
 
 private:
     HttpResult get(const std::string& path);

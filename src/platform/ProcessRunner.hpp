@@ -11,7 +11,8 @@ struct ProcessRunResult {
 };
 
 /// Runs `userCommand` in a shell with working directory `cwd` (empty = current).
-/// Stdout and stderr are merged into capturedOutput. Kills the process if it runs past timeoutSeconds.
+/// Stdout and stderr are merged into capturedOutput. Stdin is not connected to the parent (Unix: /dev/null).
+/// Kills the process if it runs past timeoutSeconds.
 ProcessRunResult runShellCommand(const std::string& cwd, const std::string& userCommand, int timeoutSeconds);
 
 } // namespace avacli

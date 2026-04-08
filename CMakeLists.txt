@@ -50,6 +50,9 @@ find_package(CURL REQUIRED)
 # System OpenSSL (for VaultStorage AES-256-GCM encryption)
 find_package(OpenSSL REQUIRED)
 
+# System SQLite3
+find_package(SQLite3 REQUIRED)
+
 # Source files
 set(SOURCES
   src/main.cpp
@@ -60,6 +63,7 @@ set(SOURCES
   src/config/ModelRegistry.cpp
   src/client/XAIClient.cpp
   src/client/VultrClient.cpp
+  src/infra/VultrDeployUserdata.cpp
   src/auth/AuthManager.cpp
   src/auth/MasterKeyManager.cpp
   src/core/AgentEngine.cpp
@@ -73,7 +77,13 @@ set(SOURCES
   src/server/RoutesData.cpp
   src/server/RoutesSettings.cpp
   src/server/RoutesInfra.cpp
+  src/server/RoutesDB.cpp
+  src/server/RoutesKnowledge.cpp
+  src/server/RoutesApps.cpp
+  src/server/RoutesServices.cpp
   src/server/LogBuffer.cpp
+  src/db/Database.cpp
+  src/services/ServiceManager.cpp
   src/session/SessionManager.cpp
   src/tools/ProjectNotes.cpp
   src/tools/ToolExecutor.cpp
@@ -98,6 +108,7 @@ target_link_libraries(avacli PRIVATE
   CURL::libcurl
   OpenSSL::SSL
   OpenSSL::Crypto
+  SQLite::SQLite3
 )
 
 if(MSVC)

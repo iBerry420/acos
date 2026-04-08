@@ -1,6 +1,7 @@
 #include "server/Routes.hpp"
 #include "server/ServerContext.hpp"
 #include "server/ServerHelpers.hpp"
+#include "server/LogBuffer.hpp"
 #include "auth/MasterKeyManager.hpp"
 
 #include <httplib.h>
@@ -59,6 +60,7 @@ void registerAuthRoutes(httplib::Server& svr, ServerContext ctx) {
             j["username"] = "admin";
             j["is_admin"] = true;
             j["message"] = "No credentials configured — access is open";
+            LogBuffer::instance().info("auth", "User logged in: admin");
             res.set_content(j.dump(), "application/json");
             return;
         }
@@ -83,6 +85,7 @@ void registerAuthRoutes(httplib::Server& svr, ServerContext ctx) {
         auto authResult = MasterKeyManager::authenticateUser(username, password);
         if (!authResult) {
             res.status = 401;
+            LogBuffer::instance().warn("auth", "Failed login attempt", {{"username", username}});
             res.set_content(R"({"error":"invalid credentials"})", "application/json");
             return;
         }
@@ -93,13 +96,18 @@ void registerAuthRoutes(httplib::Server& svr, ServerContext ctx) {
         j["username"] = authResult->username;
         j["is_admin"] = authResult->is_admin;
         j["message"] = "authenticated";
+        LogBuffer::instance().info("auth", "User logged in: " + authResult->username);
         res.set_content(j.dump(), "application/json");
     });
 
     svr.Post("/api/auth/logout", [ctx](const httplib::Request& req, httplib::Response& res) {
         std::string authHeader = req.get_header_value("Authorization");
         if (authHeader.size() > 7 && authHeader.substr(0, 7) == "Bearer ") {
-            ctx.masterKeyMgr->invalidateSession(authHeader.substr(7));
+            std::string token = authHeader.substr(7);
+            std::string username = ctx.masterKeyMgr->getSessionUser(token);
+            ctx.masterKeyMgr->invalidateSession(token);
+            if (!username.empty())
+                LogBuffer::instance().info("auth", "User logged out: " + username);
         }
         res.set_content(R"({"logged_out":true})", "application/json");
     });
@@ -188,10 +196,12 @@ void registerAuthRoutes(httplib::Server& svr, ServerContext ctx) {
             j["username"] = username;
             j["is_admin"] = true;
             j["message"] = "First admin account created, auto-logged in";
+            LogBuffer::instance().info("auth", "Account created: " + username);
             res.set_content(j.dump(), "application/json");
             return;
         }
 
+        LogBuffer::instance().info("auth", "Account created: " + username);
         res.set_content(R"({"created":true})", "application/json");
     });
 
@@ -234,6 +244,7 @@ void registerAuthRoutes(httplib::Server& svr, ServerContext ctx) {
                 res.set_content(R"({"error":"account not found"})", "application/json");
                 return;
             }
+            LogBuffer::instance().info("auth", "Password changed for: " + username);
             updated = true;
         }
 
@@ -279,6 +290,7 @@ void registerAuthRoutes(httplib::Server& svr, ServerContext ctx) {
         }
         std::string username = req.matches[1];
         MasterKeyManager::deleteAccount(username);
+        LogBuffer::instance().info("auth", "Account deleted: " + username);
         res.set_content(R"({"removed":true})", "application/json");
     });
 
@@ -323,6 +335,7 @@ void registerAuthRoutes(httplib::Server& svr, ServerContext ctx) {
             res.set_content(R"({"error":"failed to update password"})", "application/json");
             return;
         }
+        LogBuffer::instance().info("auth", "Password changed for: " + username);
         res.set_content(R"({"changed":true})", "application/json");
     });
 }

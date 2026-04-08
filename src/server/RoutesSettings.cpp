@@ -77,8 +77,12 @@ void registerSettingsRoutes(httplib::Server& svr, ServerContext ctx) {
             }
         }
 
-        if (body.contains("model") && body["model"].is_string())
-            ctx.config->model = body["model"].get<std::string>();
+        if (body.contains("model") && body["model"].is_string()) {
+            std::string newModel = body["model"].get<std::string>();
+            if (newModel != ctx.config->model)
+                LogBuffer::instance().info("settings", "Model changed");
+            ctx.config->model = newModel;
+        }
         if (body.contains("extra_model") && body["extra_model"].is_string())
             ctx.config->extraModel = body["extra_model"].get<std::string>();
         if (body.contains("xai_api_key") && body["xai_api_key"].is_string()) {
@@ -107,7 +111,7 @@ void registerSettingsRoutes(httplib::Server& svr, ServerContext ctx) {
         std::ofstream f(path);
         f << settings.dump(2);
 
-        LogBuffer::instance().info("settings", "Settings saved", {{"model", ctx.config->model}});
+        LogBuffer::instance().info("settings", "Settings updated");
 
         nlohmann::json j;
         j["saved"] = true;
@@ -142,6 +146,7 @@ void registerSettingsRoutes(httplib::Server& svr, ServerContext ctx) {
                 return;
             }
             ctx.config->workspace = resolved.string();
+            LogBuffer::instance().info("settings", "Workspace changed");
 
             nlohmann::json j;
             j["workspace"] = ctx.config->workspace;

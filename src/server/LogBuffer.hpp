@@ -33,6 +33,10 @@ public:
                const nlohmann::json& details = nullptr);
 
     nlohmann::json getEntries(int limit = 500, long long sinceTimestamp = 0) const;
+    nlohmann::json getEntriesFromDb(int limit = 500, long long sinceTimestamp = 0,
+                                    const std::string& category = "",
+                                    const std::string& level = "",
+                                    const std::string& search = "") const;
     size_t size() const;
     void clear();
 

@@ -1,4 +1,5 @@
 #include "server/LogBuffer.hpp"
+#include "db/Database.hpp"
 
 namespace avacli {
 
@@ -12,10 +13,23 @@ void LogBuffer::push(const std::string& level, const std::string& category,
     auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
 
-    std::lock_guard<std::mutex> lock(mu_);
-    entries_.push_back({now, level, category, message, details.is_null() ? nlohmann::json::object() : details});
-    while (entries_.size() > MAX_ENTRIES)
-        entries_.pop_front();
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        entries_.push_back({now, level, category, message, details.is_null() ? nlohmann::json::object() : details});
+        while (entries_.size() > MAX_ENTRIES)
+            entries_.pop_front();
+    }
+
+    try {
+        auto& db = Database::instance();
+        if (db.raw()) {
+            std::string det = (details.is_null() || details.empty()) ? "{}" : details.dump();
+            db.execute(
+                "INSERT INTO event_log (timestamp, level, category, message, details) "
+                "VALUES (?1, ?2, ?3, ?4, ?5)",
+                {std::to_string(now), level, category, message, det});
+        }
+    } catch (...) {}
 }
 
 void LogBuffer::info(const std::string& cat, const std::string& msg, const nlohmann::json& d) { push("info", cat, msg, d); }
@@ -40,6 +54,47 @@ nlohmann::json LogBuffer::getEntries(int limit, long long sinceTimestamp) const 
         count++;
     }
     return arr;
+}
+
+nlohmann::json LogBuffer::getEntriesFromDb(int limit, long long sinceTimestamp,
+                                           const std::string& category,
+                                           const std::string& level,
+                                           const std::string& search) const {
+    try {
+        auto& db = Database::instance();
+        std::string sql = "SELECT timestamp, level, category, message, details FROM event_log WHERE 1=1";
+        std::vector<std::string> params;
+        int paramIdx = 1;
+
+        if (sinceTimestamp > 0) {
+            sql += " AND timestamp > ?" + std::to_string(paramIdx++);
+            params.push_back(std::to_string(sinceTimestamp));
+        }
+        if (!category.empty() && category != "all") {
+            sql += " AND category = ?" + std::to_string(paramIdx++);
+            params.push_back(category);
+        }
+        if (!level.empty() && level != "all") {
+            sql += " AND level = ?" + std::to_string(paramIdx++);
+            params.push_back(level);
+        }
+        if (!search.empty()) {
+            sql += " AND message LIKE ?" + std::to_string(paramIdx++);
+            params.push_back("%" + search + "%");
+        }
+        sql += " ORDER BY timestamp DESC LIMIT ?" + std::to_string(paramIdx);
+        params.push_back(std::to_string(limit));
+
+        auto rows = db.query(sql, params);
+        for (auto& r : rows) {
+            if (r.contains("details") && r["details"].is_string()) {
+                try { r["details"] = nlohmann::json::parse(r["details"].get<std::string>()); } catch (...) {}
+            }
+        }
+        return rows;
+    } catch (...) {
+        return getEntries(limit, sinceTimestamp);
+    }
 }
 
 size_t LogBuffer::size() const {

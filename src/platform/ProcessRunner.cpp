@@ -115,6 +115,7 @@ ProcessRunResult runShellCommand(const std::string& cwd, const std::string& user
 #else
 
 #include <cerrno>
+#include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -150,6 +151,12 @@ ProcessRunResult runShellCommand(const std::string& cwd, const std::string& user
         if (dup2(pipefd[1], STDERR_FILENO) < 0)
             _exit(127);
         close(pipefd[1]);
+
+        int nullIn = open("/dev/null", O_RDONLY);
+        if (nullIn >= 0) {
+            dup2(nullIn, STDIN_FILENO);
+            close(nullIn);
+        }
 
         if (!cwd.empty()) {
             if (chdir(cwd.c_str()) != 0)

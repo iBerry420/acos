@@ -1,7 +1,9 @@
 #include "server/Routes.hpp"
 #include "server/ServerContext.hpp"
 #include "server/ServerHelpers.hpp"
+#include "server/LogBuffer.hpp"
 #include "client/VultrClient.hpp"
+#include "infra/VultrDeployUserdata.hpp"
 #include "config/VaultStorage.hpp"
 #include "config/ServeSettings.hpp"
 
@@ -53,6 +55,26 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
         VultrClient vc(key);
         auto regions = vc.listRegions();
         res.set_content(regions.dump(), "application/json");
+    });
+
+    svr.Get("/api/vultr/account", [ctx](const httplib::Request& req, httplib::Response& res) {
+        if (!isAdminRequest(req, ctx.masterKeyMgr)) {
+            res.status = 403;
+            res.set_content(R"({"error":"admin access required"})", "application/json");
+            return;
+        }
+        std::string key = getVultrApiKey();
+        if (key.empty()) {
+            res.status = 400;
+            res.set_content(R"({"error":"Vultr API key not configured. Add it in Settings."})", "application/json");
+            return;
+        }
+        VultrClient vc(key);
+        nlohmann::json out;
+        out["account"] = vc.getAccount();
+        out["bandwidth"] = vc.getAccountBandwidth();
+        out["pending_charges"] = vc.listPendingCharges();
+        res.set_content(out.dump(), "application/json");
     });
 
     svr.Get("/api/vultr/instances", [ctx](const httplib::Request& req, httplib::Response& res) {
@@ -112,15 +134,20 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
         std::string plan = body.value("plan", "");
         std::string osId = body.value("os_id", "");
         std::string label = body.value("label", "");
+        std::string deployConfig = body.value("deploy_config", "");
         if (region.empty() || plan.empty() || osId.empty()) {
             res.status = 400;
             res.set_content(R"({"error":"region, plan, and os_id required"})", "application/json");
             return;
         }
         VultrClient vc(key);
-        auto result = vc.createInstance(region, plan, osId, label);
+        std::string userData = vultrDeployUserDataForProfile(deployConfig);
+        auto result = vc.createInstance(region, plan, osId, label, "", userData);
         if (result.contains("error")) {
             res.status = 400;
+            LogBuffer::instance().error("deploy", "VPS deploy failed", {{"region", region}, {"plan", plan}, {"error", result["error"]}});
+        } else {
+            LogBuffer::instance().info("deploy", "VPS instance deployed", {{"region", region}, {"plan", plan}, {"label", label}, {"config", deployConfig}});
         }
         res.set_content(result.dump(), "application/json");
     });
@@ -140,8 +167,10 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
         std::string instanceId = req.matches[1];
         VultrClient vc(key);
         if (vc.destroyInstance(instanceId)) {
+            LogBuffer::instance().info("deploy", "VPS instance destroyed", {{"instance_id", instanceId}});
             res.set_content(R"({"destroyed":true})", "application/json");
         } else {
+            LogBuffer::instance().error("deploy", "Failed to destroy VPS instance", {{"instance_id", instanceId}});
             res.status = 500;
             res.set_content(R"({"error":"failed to destroy instance"})", "application/json");
         }
@@ -189,6 +218,7 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
         settings["vultr_api_key"] = apiKey;
         std::ofstream f(path);
         f << settings.dump(2);
+        LogBuffer::instance().info("settings", "Vultr API key configured");
         res.set_content(R"({"saved":true})", "application/json");
     });
 
@@ -269,6 +299,10 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
         node["domain"] = body.value("domain", "");
         node["label"] = body.value("label", ip);
         node["added_at"] = now / 1000;
+        if (body.contains("username") && !body["username"].get<std::string>().empty())
+            node["username"] = body["username"];
+        if (body.contains("password") && !body["password"].get<std::string>().empty())
+            node["has_password"] = true;
         nodes.push_back(node);
         { std::ofstream f(path); f << nodes.dump(2); }
         nlohmann::json j;

@@ -117,7 +117,7 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
                              model.find("grok-imagine-video") != std::string::npos);
 
         ctx.chatCancelFlag->store(false);
-        LogBuffer::instance().info("chat", "Chat message sent", {{"model", model}, {"session", sessionName}, {"mode", modeStr}});
+        LogBuffer::instance().info("chat", "Chat request started", {{"model", model}});
 
         res.set_header("Cache-Control", "no-cache");
         res.set_header("Connection", "keep-alive");
@@ -258,6 +258,7 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
                 sessionData.messages.push_back({"assistant", assistantContent});
                 sessionMgr.save(sessionName, sessionData);
 
+                LogBuffer::instance().info("chat", "Chat completed");
                 pushEvent({{"type", "done"}, {"success", success}, {"cancelled", false},
                            {"session", sessionName}, {"prompt_tokens", 0}, {"completion_tokens", 0}});
 
@@ -382,6 +383,7 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
                 });
 
             if (cancelFlag->load()) {
+                LogBuffer::instance().info("chat", "Chat cancelled");
                 pushEvent({{"type", "done"}, {"success", false}, {"cancelled", true},
                            {"session", sessionName},
                            {"prompt_tokens", 0}, {"completion_tokens", 0}});
@@ -497,7 +499,10 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
             sessionData->totalCompletionTokens = tracker.completionTokens();
             sessionMgr->save(sessionName, *sessionData);
 
-            LogBuffer::instance().info("chat", "Chat completed", {{"session", sessionName}, {"prompt_tokens", tracker.promptTokens()}, {"completion_tokens", tracker.completionTokens()}});
+            if (cancelFlag->load())
+                LogBuffer::instance().info("chat", "Chat cancelled");
+            else
+                LogBuffer::instance().info("chat", "Chat completed");
 
             pushEvent({{"type", "done"},
                         {"success", ok},
@@ -512,6 +517,7 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
           } catch (const std::exception& ex) {
             spdlog::error("Chat thread exception: {}", ex.what());
             pushEvent({{"type", "content_delta"}, {"content", std::string("*Error: ") + ex.what() + "*"}});
+            LogBuffer::instance().info("chat", "Chat completed");
             pushEvent({{"type", "done"}, {"success", false}, {"cancelled", false},
                         {"session", sessionName}, {"prompt_tokens", 0}, {"completion_tokens", 0}});
             std::lock_guard<std::mutex> lock(eq->mu);
@@ -520,6 +526,7 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
           } catch (...) {
             spdlog::error("Chat thread unknown exception");
             pushEvent({{"type", "content_delta"}, {"content", "*Error: unknown internal error*"}});
+            LogBuffer::instance().info("chat", "Chat completed");
             pushEvent({{"type", "done"}, {"success", false}, {"cancelled", false},
                         {"session", sessionName}, {"prompt_tokens", 0}, {"completion_tokens", 0}});
             std::lock_guard<std::mutex> lock(eq->mu);

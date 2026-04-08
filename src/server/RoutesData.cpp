@@ -22,6 +22,7 @@ void registerDataRoutes(httplib::Server& svr, ServerContext ctx) {
 
     svr.Get("/api/vault", [](const httplib::Request&, httplib::Response& res) {
         res.set_header("Access-Control-Allow-Origin", "*");
+        LogBuffer::instance().info("api", "Vault operation: list");
         auto entries = VaultStorage::listEntries();
         nlohmann::json arr = nlohmann::json::array();
         for (const auto& e : entries) {
@@ -49,6 +50,7 @@ void registerDataRoutes(httplib::Server& svr, ServerContext ctx) {
 
         if (action == "initialize") {
             bool ok = VaultStorage::initialize(password);
+            if (ok) LogBuffer::instance().info("api", "Vault operation: initialize");
             res.set_content(ok ? R"({"status":"ok"})" : R"({"error":"init failed"})", "application/json");
             return;
         }
@@ -64,6 +66,7 @@ void registerDataRoutes(httplib::Server& svr, ServerContext ctx) {
             }
             VaultStorage::initialize(password);
             bool ok = VaultStorage::store(password, name, service, value);
+            if (ok) LogBuffer::instance().info("api", "Vault operation: store");
             res.set_content(ok ? R"({"status":"ok"})" : R"({"error":"store failed"})", "application/json");
             return;
         }
@@ -77,6 +80,7 @@ void registerDataRoutes(httplib::Server& svr, ServerContext ctx) {
             }
             auto val = VaultStorage::retrieve(password, name);
             if (val) {
+                LogBuffer::instance().info("api", "Vault operation: retrieve");
                 nlohmann::json j;
                 j["status"] = "ok";
                 j["value"] = *val;
@@ -91,6 +95,7 @@ void registerDataRoutes(httplib::Server& svr, ServerContext ctx) {
         if (action == "remove") {
             std::string name = body.value("name", "");
             bool ok = VaultStorage::remove(password, name);
+            if (ok) LogBuffer::instance().info("api", "Vault operation: remove");
             res.set_content(ok ? R"({"status":"ok"})" : R"({"error":"not found"})", "application/json");
             return;
         }
@@ -134,6 +139,7 @@ void registerDataRoutes(httplib::Server& svr, ServerContext ctx) {
         if (action == "remove") {
             std::string slug = body.value("slug", "");
             bool ok = VaultStorage::removeApiRegistry(slug);
+            if (ok) LogBuffer::instance().info("api", "Vault operation: api_registry_remove");
             res.set_content(ok ? R"({"status":"ok"})" : R"({"error":"not found"})", "application/json");
             return;
         }
@@ -158,6 +164,7 @@ void registerDataRoutes(httplib::Server& svr, ServerContext ctx) {
         entry.status = body.value("status", "configured");
 
         bool ok = VaultStorage::saveApiRegistry(slug, entry);
+        if (ok) LogBuffer::instance().info("api", "Vault operation: api_registry_save");
         res.set_content(ok ? R"({"status":"ok"})" : R"({"error":"save failed"})", "application/json");
     });
 
@@ -165,6 +172,7 @@ void registerDataRoutes(httplib::Server& svr, ServerContext ctx) {
         res.set_header("Access-Control-Allow-Origin", "*");
         std::string slug = req.matches[1];
         bool ok = VaultStorage::removeApiRegistry(slug);
+        if (ok) LogBuffer::instance().info("api", "Vault operation: api_registry_delete");
         res.set_content(ok ? R"({"ok":true})" : R"({"error":"not found"})", "application/json");
     });
 
@@ -240,6 +248,8 @@ void registerDataRoutes(httplib::Server& svr, ServerContext ctx) {
             return;
         }
 
+        LogBuffer::instance().debug("chat", "Session loaded: " + name);
+
         nlohmann::json messages = nlohmann::json::array();
         for (const auto& m : data.messages) {
             nlohmann::json msg{{"role", m.role}, {"content", m.content}};
@@ -273,6 +283,7 @@ void registerDataRoutes(httplib::Server& svr, ServerContext ctx) {
         SessionManager mgr;
         SessionData data;
         mgr.load(session, data);
+        LogBuffer::instance().debug("chat", "Session loaded: " + session);
         std::string role = body.value("role", "user");
         std::string content = body.value("content", "");
         data.messages.push_back({role, content});
@@ -354,6 +365,8 @@ void registerDataRoutes(httplib::Server& svr, ServerContext ctx) {
             return;
         }
 
+        LogBuffer::instance().debug("chat", "Session loaded: " + session);
+
         int visCount = 0;
         int targetRealIndex = -1;
         for (size_t i = 0; i < data.messages.size(); i++) {
@@ -397,6 +410,7 @@ void registerDataRoutes(httplib::Server& svr, ServerContext ctx) {
 
         try {
             fs::remove_all(sessionDir);
+            LogBuffer::instance().info("chat", "Session deleted: " + name);
             res.set_content(R"({"deleted":true})", "application/json");
         } catch (const std::exception& e) {
             res.status = 500;

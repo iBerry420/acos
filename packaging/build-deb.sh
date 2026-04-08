@@ -28,9 +28,9 @@ Version: $VERSION
 Section: devel
 Priority: optional
 Architecture: $ARCH
-Depends: libcurl4 (>= 7.68.0)
+Depends: libcurl4 (>= 7.68.0), libssl3 | libssl1.1
 Maintainer: iBerry420
-Homepage: https://github.com/avalynn-ai/acos
+Homepage: https://github.com/iBerry420/acos
 Description: avacli (open source) - Single-binary autonomous AI agent platform powered by xAI Grok.
  avacli provides a local web UI, embedded WebIDE, agent tools, cloud fleet management (Vultr), and more. No external runtimes required beyond libcurl.
 EOF
@@ -45,7 +45,7 @@ echo "  avacli serve                  # Start web UI + backend on http://localho
 echo "  avacli chat \"Show me the logs\"   # One-shot CLI chat with agent"
 echo ""
 echo "Build from source or use the .deb for easy install."
-echo "Documentation: https://github.com/avalynn-ai/acos"
+echo "Documentation: https://github.com/iBerry420/acos"
 EOF
 chmod 755 "$PKG_DIR/DEBIAN/postinst"
 
@@ -60,7 +60,7 @@ chmod 755 "$PKG_DIR/DEBIAN/prerm"
 cat > "$PKG_DIR/usr/share/doc/$PKG_NAME/copyright" << EOF
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: avacli
-Source: https://github.com/avalynn-ai/acos
+Source: https://github.com/iBerry420/acos
 
 Files: *
 Copyright: 2024-2025 iBerry420 / avalynn-ai
@@ -70,7 +70,7 @@ EOF
 
 cat > "$PKG_DIR/etc/avacli/config.json" << EOF
 {
-    "platform_url": "https://github.com/avalynn-ai/acos",
+    "platform_url": "https://github.com/iBerry420/acos",
     "default_model": "grok-beta",
     "serve_port": 8080,
     "serve_host": "0.0.0.0"

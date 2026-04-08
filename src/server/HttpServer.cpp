@@ -7,6 +7,7 @@
 #include "config/ModelRegistry.hpp"
 #include "tools/ToolRegistry.hpp"
 #include "platform/Paths.hpp"
+#include "db/Database.hpp"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -33,6 +34,7 @@ HttpServer::HttpServer(ServeConfig config)
 HttpServer::~HttpServer() { stop(); }
 
 void HttpServer::start() {
+    Database::instance().init();
     masterKeyMgr_.loadSessionsFromDisk();
     setupRoutes();
     running_ = true;
@@ -142,6 +144,37 @@ void HttpServer::setupRoutes() {
     registerDataRoutes(svr, ctx);
     registerSettingsRoutes(svr, ctx);
     registerInfraRoutes(svr, ctx);
+    registerDBRoutes(svr, ctx);
+    registerKnowledgeRoutes(svr, ctx);
+    registerAppRoutes(svr, ctx);
+    registerServiceRoutes(svr, ctx);
+
+    // App serving: /apps/:slug/* serves user-created app files from SQLite
+    svr.Get(R"(/apps/([^/]+)/(.*))", [](const httplib::Request& req, httplib::Response& res) {
+        std::string slug = req.matches[1];
+        std::string filepath = req.matches[2];
+        if (filepath.empty()) filepath = "index.html";
+
+        try {
+            auto& db = Database::instance();
+            auto row = db.queryOne(
+                "SELECT af.content, af.mime_type FROM app_files af "
+                "JOIN apps a ON a.id = af.app_id "
+                "WHERE a.slug = ?1 AND af.filename = ?2 AND a.status = 'active'",
+                {slug, filepath});
+
+            if (row.is_null()) {
+                res.status = 404;
+                res.set_content("Not Found", "text/plain");
+                return;
+            }
+            res.set_content(row["content"].get<std::string>(),
+                            row["mime_type"].get<std::string>().c_str());
+        } catch (...) {
+            res.status = 500;
+            res.set_content("Internal Server Error", "text/plain");
+        }
+    });
 
     // SPA entry point
     svr.Get("/", [](const httplib::Request&, httplib::Response& res) {

@@ -1,6 +1,7 @@
 #include "server/Routes.hpp"
 #include "server/ServerContext.hpp"
 #include "server/ServerHelpers.hpp"
+#include "server/LogBuffer.hpp"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -266,6 +267,7 @@ void registerFileRoutes(httplib::Server& svr, ServerContext ctx) {
         j["type"] = mediaType;
         j["filename"] = origName;
         j["size"] = file.content.size();
+        LogBuffer::instance().info("assets", "File uploaded: " + origName);
         res.set_content(j.dump(), "application/json");
     });
 
@@ -467,6 +469,7 @@ void registerFileRoutes(httplib::Server& svr, ServerContext ctx) {
         // Remove metadata
         std::string metaDir = (fs::path(ctx.config->workspace) / "uploads" / "asset-meta").string();
         fs::remove((fs::path(metaDir) / (id + ".json")), ec);
+        LogBuffer::instance().info("assets", "Asset deleted", {{"id", id}});
         res.set_content(R"({"ok":true})", "application/json");
     });
 
@@ -556,6 +559,7 @@ void registerFileRoutes(httplib::Server& svr, ServerContext ctx) {
             res.set_content(R"({"error":"failed to create folder"})", "application/json");
             return;
         }
+        LogBuffer::instance().info("assets", "Folder created: " + name);
         res.set_content(R"({"ok":true})", "application/json");
     });
 
@@ -779,6 +783,7 @@ void registerFileRoutes(httplib::Server& svr, ServerContext ctx) {
             std::ofstream mf(metaPath);
             mf << meta.dump(2);
 
+            LogBuffer::instance().info("assets", "Asset analyzed", {{"id", id}});
             res.set_content(analysis.dump(), "application/json");
         } catch (const std::exception& e) {
             res.status = 500;

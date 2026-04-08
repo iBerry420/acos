@@ -38,3 +38,6 @@ dist/
 
 # Agent backups
 *.bak
+
+# Runtime data
+uploads/

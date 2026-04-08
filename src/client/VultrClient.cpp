@@ -1,10 +1,28 @@
 #include "client/VultrClient.hpp"
 #include <curl/curl.h>
 #include <spdlog/spdlog.h>
+#include <cstdint>
 
 namespace avacli {
 
 namespace {
+
+std::string base64Encode(const unsigned char* data, size_t len) {
+    static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve((len * 4 / 3) + 4);
+    for (size_t i = 0; i < len;) {
+        uint32_t a = i < len ? static_cast<uint8_t>(data[i++]) : 0;
+        uint32_t b = i < len ? static_cast<uint8_t>(data[i++]) : 0;
+        uint32_t c = i < len ? static_cast<uint8_t>(data[i++]) : 0;
+        uint32_t triple = (a << 16) | (b << 8) | c;
+        out += b64[(triple >> 18) & 0x3f];
+        out += b64[(triple >> 12) & 0x3f];
+        out += (i > len + 1) ? '=' : b64[(triple >> 6) & 0x3f];
+        out += (i > len) ? '=' : b64[triple & 0x3f];
+    }
+    return out;
+}
 
 size_t curlWriteCb(char* ptr, size_t size, size_t nmemb, void* user) {
     auto* out = static_cast<std::string*>(user);
@@ -134,13 +152,18 @@ nlohmann::json VultrClient::getInstance(const std::string& instanceId) {
 
 nlohmann::json VultrClient::createInstance(const std::string& region, const std::string& plan,
                                             const std::string& osId, const std::string& label,
-                                            const std::string& startupScript) {
+                                            const std::string& startupScriptId,
+                                            const std::string& userDataPlain) {
     nlohmann::json body;
     body["region"] = region;
     body["plan"] = plan;
     body["os_id"] = std::stoi(osId);
     if (!label.empty()) body["label"] = label;
-    if (!startupScript.empty()) body["script_id"] = startupScript;
+    if (!startupScriptId.empty()) body["script_id"] = startupScriptId;
+    if (!userDataPlain.empty()) {
+        body["user_data"] = base64Encode(reinterpret_cast<const unsigned char*>(userDataPlain.data()),
+                                         userDataPlain.size());
+    }
 
     auto resp = post("/instances", body);
     if (!resp.ok()) {
@@ -165,6 +188,27 @@ nlohmann::json VultrClient::listOSImages() {
     if (!resp.ok()) return nlohmann::json::array();
     try { return nlohmann::json::parse(resp.body); }
     catch (...) { return nlohmann::json::array(); }
+}
+
+nlohmann::json VultrClient::getAccount() {
+    auto resp = get("/account");
+    if (!resp.ok()) return nlohmann::json::object();
+    try { return nlohmann::json::parse(resp.body); }
+    catch (...) { return nlohmann::json::object(); }
+}
+
+nlohmann::json VultrClient::getAccountBandwidth() {
+    auto resp = get("/account/bandwidth");
+    if (!resp.ok()) return nlohmann::json::object();
+    try { return nlohmann::json::parse(resp.body); }
+    catch (...) { return nlohmann::json::object(); }
+}
+
+nlohmann::json VultrClient::listPendingCharges() {
+    auto resp = get("/billing/pending-charges");
+    if (!resp.ok()) return nlohmann::json::object();
+    try { return nlohmann::json::parse(resp.body); }
+    catch (...) { return nlohmann::json::object(); }
 }
 
 } // namespace avacli

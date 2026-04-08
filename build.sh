@@ -11,7 +11,7 @@ echo "=== avacli build script ==="
 if command -v apt-get &>/dev/null; then
     echo "Checking system dependencies..."
     MISSING=""
-    for pkg in build-essential cmake libcurl4-openssl-dev libssl-dev; do
+    for pkg in build-essential cmake libcurl4-openssl-dev libssl-dev libsqlite3-dev; do
         if ! dpkg -s "$pkg" &>/dev/null 2>&1; then
             MISSING="$MISSING $pkg"
         fi
