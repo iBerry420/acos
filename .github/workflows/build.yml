@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y ninja-build libcurl4-openssl-dev
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libcurl4-openssl-dev libssl-dev libsqlite3-dev
 
       - name: Configure & build
         run: |
@@ -40,12 +40,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: brew install ninja curl
+        run: brew install ninja curl sqlite3
 
       - name: Configure & build
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="$(brew --prefix curl)" \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix curl);$(brew --prefix sqlite3)" \
             -DCMAKE_OSX_ARCHITECTURES=arm64
           cmake --build build
 
@@ -66,12 +66,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: brew install ninja curl
+        run: brew install ninja curl sqlite3
 
       - name: Configure & build
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="$(brew --prefix curl)" \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix curl);$(brew --prefix sqlite3)" \
             -DCMAKE_OSX_ARCHITECTURES=x86_64
           cmake --build build
 

@@ -1,4 +1,8 @@
 cmake_minimum_required(VERSION 3.22)
+
+# Allow FetchContent dependencies with older cmake_minimum_required on CMake 4.x+
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "")
+
 project(avacli LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -11,7 +15,7 @@ include(FetchContent)
 FetchContent_Declare(
   CLI11
   GIT_REPOSITORY https://github.com/CLIUtils/CLI11.git
-  GIT_TAG        v2.3.2
+  GIT_TAG        v2.4.2
   GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(CLI11)

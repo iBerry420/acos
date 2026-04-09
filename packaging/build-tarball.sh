@@ -67,6 +67,7 @@ Usage:
 Documentation: https://avalynn.ai/platform/download.php
 README_EOF
 
+mkdir -p "$OUTDIR"
 TARBALL="$OUTDIR/${PKG_NAME}-${VERSION}-${PLATFORM}-${ARCH}.tar.gz"
 tar -czf "$TARBALL" -C "$(dirname "$TARDIR")" "$(basename "$TARDIR")"
 rm -rf "$(dirname "$TARDIR")"
