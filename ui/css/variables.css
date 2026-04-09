@@ -1,0 +1,11 @@
+/* Avacli Theme Variables — edit these to customize the look */
+:root{
+--bg-body:#020208;--bg-surface:#0a0a14;--bg-elevated:#12121e;
+--text-primary:#e2e2e8;--text-secondary:rgba(255,255,255,0.5);--text-muted:rgba(255,255,255,0.3);
+--accent:#7c3aed;--accent-light:#a855f7;--accent-pale:#c4b5fd;
+--gradient:linear-gradient(135deg,#7c3aed,#a855f7);
+--border:rgba(255,255,255,0.04);--border-accent:rgba(124,58,237,0.18);
+--radius-sm:8px;--radius-md:12px;--radius-lg:16px;
+--font:'Inter',system-ui,-apple-system,sans-serif;
+--mono:ui-monospace,'Cascadia Code','SF Mono',Menlo,Consolas,monospace;
+}

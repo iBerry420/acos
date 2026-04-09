@@ -20,6 +20,11 @@ struct Config {
     int  servePort = 8080;
     std::string serveHost = "0.0.0.0";
 
+    // Detached UI options
+    std::string uiDir;
+    bool useEmbeddedUI = false;
+    std::string uiTheme;
+
     std::string xaiApiKey() const;
     bool        validate() const;
     bool        validateServe() const;

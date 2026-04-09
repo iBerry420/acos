@@ -1,3 +1,43 @@
+## [2.1.0] — 2026-04-09
+
+**Detached UI: the web frontend is now served from disk, enabling instant edits, theming, and customization without recompiling.**
+
+### New features
+
+- **Disk-based UI serving** — the embedded monolithic HTML/CSS/JS frontend has been extracted into a standalone `ui/` directory. The server reads files from disk at request time, so any edit to HTML, CSS, or JS is reflected on the next browser refresh — zero recompile, zero restart.
+- **`--ui-dir` flag** — point `avacli serve` at any directory to serve a completely custom frontend. Defaults to `~/.avacli/ui/` if it exists, otherwise falls back to the compiled-in embedded assets.
+- **`--ui-embedded` flag** — force the compiled-in UI even when a disk `ui/` directory exists, for debugging or rollback.
+- **`--ui-theme` flag** — load a theme CSS overlay from the `ui/themes/` directory (e.g. `--ui-theme cyberpunk`).
+- **`--ui-init` flag** — extract the built-in embedded UI to `~/.avacli/ui/` (or the path given by `--ui-dir`) as a starting point for customization.
+- **Theme system** — `ui/css/variables.css` defines all design tokens (colors, fonts, radii). Drop a CSS file in `ui/themes/` to override them. Ships with `default`, `light`, and `cyberpunk` themes.
+- **Theme persistence** — active theme is saved in `settings.json` (`ui_theme` key) and loaded on startup.
+
+### Architecture
+
+- **`UIFileServer`** — new C++ class (`src/server/UIFileServer.hpp/cpp`) handles disk-based file serving with MIME type detection, path traversal protection, and automatic SPA fallback (serves `index.html` for unmatched routes).
+- **Embedded fallback preserved** — `EmbeddedAssets.hpp` remains in the binary. If no `ui/` directory is found and `--ui-dir` is not set, the server serves the compiled-in UI exactly as before. Single-binary deployment still works.
+- **Extracted frontend** — `ui/index.html` loads `css/variables.css`, `css/style.css`, and `js/app.js` as separate files instead of one inlined monolith.
+
+### CLI changes
+
+```
+avacli serve                             # disk UI if available, else embedded
+avacli serve --ui-dir ./my-custom-ui     # serve from any directory
+avacli serve --ui-embedded               # force compiled-in UI
+avacli serve --ui-theme light            # apply a theme
+avacli serve --ui-init                   # extract embedded UI to disk
+avacli serve --ui-init --ui-dir ./my-ui  # extract to a custom path
+```
+
+### New files
+
+- `src/server/UIFileServer.hpp` / `UIFileServer.cpp`
+- `ui/index.html`, `ui/css/variables.css`, `ui/css/style.css`, `ui/js/app.js`
+- `ui/themes/default.css`, `ui/themes/light.css`, `ui/themes/cyberpunk.css`
+- `scripts/extract-ui.py` — re-extract UI from `EmbeddedAssets.hpp`
+
+---
+
 ## [2.0.0] — 2026-04-08
 
 **Major release: SQLite persistence, Apps platform, Services engine, Knowledge Base, and agent reliability overhaul.**

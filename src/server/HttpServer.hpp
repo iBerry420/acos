@@ -17,6 +17,11 @@ struct ServeConfig {
     std::string apiKey;
     std::string chatEndpointUrl = "https://api.x.ai/v1/chat/completions";
     std::string extraModel;
+
+    // Detached UI options
+    std::string uiDir;              // Custom UI directory (empty = use default ~/.avacli/ui/)
+    bool useEmbeddedUI = false;     // Force compiled-in UI, ignore disk files
+    std::string uiTheme;            // Active theme name (empty = "default")
 };
 
 class HttpServer {

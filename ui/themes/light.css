@@ -1,0 +1,35 @@
+/* Avacli Light Theme — override variables.css tokens */
+:root {
+    --bg-body: #f5f5f7;
+    --bg-surface: #ffffff;
+    --bg-elevated: #f0f0f4;
+    --text-primary: #1a1a2e;
+    --text-secondary: rgba(0, 0, 0, 0.55);
+    --text-muted: rgba(0, 0, 0, 0.35);
+    --accent: #7c3aed;
+    --accent-light: #8b5cf6;
+    --accent-pale: #6d28d9;
+    --gradient: linear-gradient(135deg, #7c3aed, #a855f7);
+    --border: rgba(0, 0, 0, 0.08);
+    --border-accent: rgba(124, 58, 237, 0.2);
+}
+
+body {
+    color-scheme: light;
+}
+
+.codeblock, .tool-body pre, .file-content {
+    background: #f8f8fc;
+}
+
+.ilc {
+    background: #ede9fe;
+    color: #5b21b6;
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.12);
+}
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 0, 0, 0.2);
+}

@@ -305,6 +305,9 @@ int Application::runServe() {
     sc.session = config_.session;
     sc.apiKey = config_.xaiApiKey();
     sc.chatEndpointUrl = "https://api.x.ai/v1/chat/completions";
+    sc.uiDir = config_.uiDir;
+    sc.useEmbeddedUI = config_.useEmbeddedUI;
+    sc.uiTheme = config_.uiTheme;
 
     HttpServer server(sc);
     server.start();

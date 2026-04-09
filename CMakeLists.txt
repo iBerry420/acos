@@ -74,6 +74,7 @@ set(SOURCES
   src/core/AgentEngine.cpp
   src/core/Application.cpp
   src/server/HttpServer.cpp
+  src/server/UIFileServer.cpp
   src/server/ServerHelpers.cpp
   src/server/RoutesAuth.cpp
   src/server/RoutesChat.cpp

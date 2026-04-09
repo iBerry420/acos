@@ -1,0 +1,33 @@
+/* Avacli Cyberpunk Theme */
+:root {
+    --bg-body: #0a0a0f;
+    --bg-surface: #0d0d18;
+    --bg-elevated: #141428;
+    --text-primary: #00ffcc;
+    --text-secondary: rgba(0, 255, 204, 0.5);
+    --text-muted: rgba(0, 255, 204, 0.25);
+    --accent: #ff00ff;
+    --accent-light: #ff44ff;
+    --accent-pale: #cc88ff;
+    --gradient: linear-gradient(135deg, #ff00ff, #00ffcc);
+    --border: rgba(0, 255, 204, 0.06);
+    --border-accent: rgba(255, 0, 255, 0.2);
+    --font: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+}
+
+.sb-logo {
+    text-shadow: 0 0 20px rgba(255, 0, 255, 0.5);
+}
+
+.msg-user .msg-bubble {
+    border-color: rgba(255, 0, 255, 0.25);
+    box-shadow: 0 0 15px rgba(255, 0, 255, 0.05);
+}
+
+.msg-ast .msg-bubble {
+    border-color: rgba(0, 255, 204, 0.1);
+}
+
+.btn-send {
+    box-shadow: 0 0 20px rgba(255, 0, 255, 0.3);
+}

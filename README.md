@@ -11,7 +11,7 @@
 | Capability | Description |
 |------------|-------------|
 | **Grok agent** | Multi-turn loop: model proposes tool calls → your workspace executes them → results return to the model (bounded turn count). |
-| **`serve`** | cpp-httplib server: static SPA + `/api/*` (chat with SSE, files, settings, auth, tools, vault, sessions, optional Vultr helpers). |
+| **`serve`** | cpp-httplib server: detached UI (served from disk, themeable, hot-reloadable) + `/api/*` (chat with SSE, files, settings, auth, tools, vault, sessions, optional Vultr helpers). Falls back to compiled-in assets if no `ui/` directory exists. |
 | **Headless CLI** | Non-interactive runs: `-t` / `chat <msg>`, optional stdin pipe; output as plain text, JSON summary, or **stream-json** (line-delimited events for scripts). |
 | **Sessions** | Named sessions persist conversation, todos, memory snippets, and edit history under your config directory. |
 | **Vault** | AES-256-GCM encrypted storage (OpenSSL) for secrets the agent can use with vault tools. |
@@ -37,7 +37,7 @@ Runtime system dependencies are **libcurl**, **OpenSSL**, and **SQLite3**. Other
 
 3. **`AgentEngine`** maintains the message list, calls Grok with the current tool schema for the active **mode** (`question`, `plan`, `agent`), and executes tool calls through **`ToolExecutor`** using definitions from **`ToolRegistry`**. Tool output is fed back until the model finishes or limits hit (e.g. max tool turns, context warnings).
 
-4. **`HttpServer`** wires **route modules** (`RoutesAuth`, `RoutesChat`, `RoutesFiles`, `RoutesSettings`, `RoutesTools`, `RoutesData`, `RoutesInfra`, `RoutesApps`, `RoutesServices`, `RoutesKnowledge`, `RoutesDB`, …), **session cookies / master-key auth**, and serves **embedded frontend assets** (`EmbeddedAssets`) for `/`. Chat streaming uses **Server-Sent Events** where applicable.
+4. **`HttpServer`** wires **route modules** (`RoutesAuth`, `RoutesChat`, `RoutesFiles`, `RoutesSettings`, `RoutesTools`, `RoutesData`, `RoutesInfra`, `RoutesApps`, `RoutesServices`, `RoutesKnowledge`, `RoutesDB`, …), **session cookies / master-key auth**, and serves the **frontend UI**. By default, the UI is served from a `ui/` directory on disk via **`UIFileServer`**, with automatic fallback to compiled-in **`EmbeddedAssets`** if no disk UI is found. Chat streaming uses **Server-Sent Events** where applicable.
 
 ### Context the agent sees
 
@@ -183,6 +183,46 @@ Create the admin user for the UI:
 ```
 
 Then open the printed URL, sign in (default username **`admin`**), and configure xAI (and optional Vultr, etc.) in **Settings** if you did not set a key on the host.
+
+### Detached UI (theming & customization)
+
+The web frontend lives in a `ui/` directory on disk, separate from the binary. Edit any file and refresh your browser — no recompile needed.
+
+```bash
+# Serve with disk-based UI (default behavior if ui/ exists)
+./build/avacli serve --ui-dir ./ui
+
+# Extract the built-in UI as a starting point for customization
+./build/avacli serve --ui-init
+./build/avacli serve --ui-init --ui-dir ./my-custom-ui
+
+# Apply a theme
+./build/avacli serve --ui-theme light
+./build/avacli serve --ui-theme cyberpunk
+
+# Force the compiled-in UI (ignore disk)
+./build/avacli serve --ui-embedded
+```
+
+**UI directory layout:**
+
+```
+ui/
+├── index.html              # App shell
+├── css/
+│   ├── variables.css       # Design tokens (colors, fonts, radii)
+│   └── style.css           # All styles
+├── js/
+│   └── app.js              # Application logic
+└── themes/
+    ├── default.css          # Empty (uses variables.css as-is)
+    ├── light.css            # Light theme
+    └── cyberpunk.css        # Cyberpunk theme
+```
+
+To create a custom theme, add a CSS file to `ui/themes/` that overrides the variables in `variables.css`, then pass `--ui-theme <name>` or set `"ui_theme"` in `~/.avacli/settings.json`.
+
+If no `ui/` directory is found and `--ui-dir` is not specified, the server falls back to the compiled-in embedded assets — the binary still works as a single-file deployment.
 
 ### Headless / automation
 

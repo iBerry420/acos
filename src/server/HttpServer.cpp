@@ -3,6 +3,7 @@
 #include "server/ServerHelpers.hpp"
 #include "server/Routes.hpp"
 #include "server/EmbeddedAssets.hpp"
+#include "server/UIFileServer.hpp"
 #include "server/LogBuffer.hpp"
 #include "config/ModelRegistry.hpp"
 #include "tools/ToolRegistry.hpp"
@@ -182,14 +183,71 @@ void HttpServer::setupRoutes() {
         }
     });
 
+    // Resolve the UI directory once at startup
+    std::string resolvedUiDir;
+    bool servingFromDisk = false;
+    if (!config_.useEmbeddedUI) {
+        resolvedUiDir = UIFileServer::resolveUiDir(config_.uiDir);
+        if (UIFileServer::isValidUiDir(resolvedUiDir)) {
+            servingFromDisk = true;
+            spdlog::info("Serving UI from disk: {}", resolvedUiDir);
+        } else {
+            spdlog::info("No UI directory at {} — using compiled-in UI", resolvedUiDir);
+        }
+    } else {
+        spdlog::info("Using compiled-in embedded UI (--ui-embedded)");
+    }
+
+    std::string uiDir = resolvedUiDir;
+    std::string uiTheme = config_.uiTheme;
+
+    // Serve static UI assets from disk: /ui/*
+    if (servingFromDisk) {
+        svr.Get(R"(/ui/(.+))", [uiDir](const httplib::Request& req, httplib::Response& res) {
+            auto result = UIFileServer::serveFile(uiDir, req.path);
+            if (result) {
+                res.set_content(result->first, result->second.c_str());
+            } else {
+                res.status = 404;
+                res.set_content("Not Found", "text/plain");
+            }
+        });
+    }
+
     // SPA entry point
-    svr.Get("/", [](const httplib::Request&, httplib::Response& res) {
+    svr.Get("/", [servingFromDisk, uiDir, uiTheme](const httplib::Request&, httplib::Response& res) {
+        if (servingFromDisk) {
+            auto html = UIFileServer::getIndexFromDisk(uiDir, uiTheme);
+            if (html) {
+                res.set_content(*html, "text/html");
+                return;
+            }
+        }
         res.set_content(getIndexHtml(), "text/html");
     });
 
-    // Catch-all: serve SPA for client-side routing
-    svr.Get(R"(/.+)", [](const httplib::Request& req, httplib::Response& res) {
+    // Catch-all: serve static files or SPA index for client-side routing
+    svr.Get(R"(/.+)", [servingFromDisk, uiDir, uiTheme](const httplib::Request& req, httplib::Response& res) {
         if (req.path.rfind("/api/", 0) == 0) return;
+        if (req.path.rfind("/apps/", 0) == 0) return;
+
+        // Try serving a static file from the UI directory
+        if (servingFromDisk) {
+            auto result = UIFileServer::serveFile(uiDir, req.path);
+            if (result) {
+                res.set_content(result->first, result->second.c_str());
+                return;
+            }
+        }
+
+        // SPA fallback: serve index.html for client-side routing
+        if (servingFromDisk) {
+            auto html = UIFileServer::getIndexFromDisk(uiDir, uiTheme);
+            if (html) {
+                res.set_content(*html, "text/html");
+                return;
+            }
+        }
         res.set_content(getIndexHtml(), "text/html");
     });
 }

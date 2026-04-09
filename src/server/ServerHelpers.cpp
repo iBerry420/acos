@@ -197,6 +197,8 @@ void mergeServeDiskIntoConfig(ServeConfig& sc) {
     }
     if (j.contains("extra_model") && j["extra_model"].is_string())
         sc.extraModel = j["extra_model"].get<std::string>();
+    if (sc.uiTheme.empty() && j.contains("ui_theme") && j["ui_theme"].is_string())
+        sc.uiTheme = j["ui_theme"].get<std::string>();
 }
 
 void resolveXaiAuth(const ServeConfig& sc, std::string& apiKey, std::string& chatUrl) {

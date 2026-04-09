@@ -4,6 +4,7 @@
 #include "config/ModelRegistry.hpp"
 #include "core/Application.hpp"
 #include "core/Types.hpp"
+#include "server/UIFileServer.hpp"
 #include <CLI/CLI.hpp>
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -75,11 +76,20 @@ int main(int argc, char** argv) {
     app.add_option("--set-master-key", setMasterKey, "Set password for the default admin account");
     app.add_flag("--generate-master-key", generateMasterKey, "Generate a random password for the default admin account");
 
-    auto* serve_cmd = app.add_subcommand("serve", "Start embedded HTTP server with web UI");
+    std::string uiDir;
+    bool useEmbeddedUI = false;
+    std::string uiTheme;
+    bool uiInit = false;
+
+    auto* serve_cmd = app.add_subcommand("serve", "Start HTTP server with web UI");
     serve_cmd->add_option("--port,-p", config.servePort, "Server port")
         ->default_val(8080);
     serve_cmd->add_option("--host", config.serveHost, "Bind host")
         ->default_val("0.0.0.0");
+    serve_cmd->add_option("--ui-dir", uiDir, "Custom UI directory (default: ~/.avacli/ui/)");
+    serve_cmd->add_flag("--ui-embedded", useEmbeddedUI, "Force compiled-in UI, ignore disk files");
+    serve_cmd->add_option("--ui-theme", uiTheme, "Active UI theme name");
+    serve_cmd->add_flag("--ui-init", uiInit, "Extract built-in UI to ~/.avacli/ui/ and exit");
 
     std::string chatMessage;
     auto* chat_cmd = app.add_subcommand("chat", "Send a one-shot chat message");
@@ -129,6 +139,22 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Handle --ui-init: extract embedded UI to disk and exit
+    if (uiInit) {
+        std::string target = uiDir.empty() ? UIFileServer::defaultUiDir() : uiDir;
+        std::cout << "Extracting built-in UI to " << target << " ...\n";
+        if (UIFileServer::extractEmbeddedUI(target)) {
+            std::cout << "Done. You can now customize files in " << target << "/\n"
+                      << "  css/variables.css  — theme tokens (colors, fonts, radii)\n"
+                      << "  css/style.css      — all UI styles\n"
+                      << "  js/app.js          — application logic\n"
+                      << "  themes/            — drop theme CSS overrides here\n";
+            return 0;
+        }
+        std::cerr << "Failed to extract UI.\n";
+        return 1;
+    }
+
     // Handle login subcommand
     if (login_cmd->parsed()) {
         if (!MasterKeyManager::isConfigured()) {
@@ -168,6 +194,9 @@ int main(int argc, char** argv) {
 
     if (serve_cmd->parsed() || !hasExplicitAction) {
         config.serveMode = true;
+        config.uiDir = uiDir;
+        config.useEmbeddedUI = useEmbeddedUI;
+        config.uiTheme = uiTheme;
     }
 
     config.mode = modeFromString(modeStr);
