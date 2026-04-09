@@ -67,6 +67,7 @@ set(SOURCES
   src/config/ModelRegistry.cpp
   src/client/XAIClient.cpp
   src/client/VultrClient.cpp
+  src/client/NodeClient.cpp
   src/infra/VultrDeployUserdata.cpp
   src/auth/AuthManager.cpp
   src/auth/MasterKeyManager.cpp
@@ -88,6 +89,7 @@ set(SOURCES
   src/server/LogBuffer.cpp
   src/db/Database.cpp
   src/services/ServiceManager.cpp
+  src/services/MeshManager.cpp
   src/session/SessionManager.cpp
   src/tools/ProjectNotes.cpp
   src/tools/ToolExecutor.cpp

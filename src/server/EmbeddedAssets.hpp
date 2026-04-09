@@ -433,18 +433,40 @@ body{background:var(--bg-body);color:var(--text-primary);font-family:var(--font)
 /* ── Nodes Panel (right side) ───────────────────────── */
 .chat-layout{display:flex;flex:1;overflow:hidden;min-height:0}
 .chat-main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0;min-height:0}
-.nodes-panel{width:240px;min-width:240px;background:var(--bg-surface);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden}
+.nodes-panel{width:240px;min-width:240px;background:var(--bg-surface);border-left:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;transition:transform .25s ease}
 .nodes-panel-head{padding:.75rem 1rem;border-bottom:1px solid var(--border);font-size:.8125rem;font-weight:600;color:var(--accent-pale);display:flex;align-items:center;justify-content:space-between}
 .nodes-panel-list{flex:1;overflow-y:auto;padding:.5rem}
-.node-item{display:flex;align-items:center;gap:.5rem;padding:.5rem .625rem;border-radius:8px;cursor:default;margin-bottom:.25rem;transition:background .12s}
-.node-item:hover{background:rgba(255,255,255,0.03)}
+.node-item{display:flex;align-items:center;gap:.5rem;padding:.5rem .625rem;border-radius:8px;cursor:pointer;margin-bottom:.25rem;transition:background .12s}
+.node-item:hover{background:rgba(255,255,255,0.05)}
 .node-item.self{border:1px solid var(--border-accent);background:rgba(124,58,237,0.05)}
+.node-item.active{background:rgba(124,58,237,0.12);border:1px solid var(--border-accent)}
 .node-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;background:rgba(255,255,255,0.15)}
 .node-dot.online{background:#4ade80;box-shadow:0 0 6px rgba(74,222,128,0.4)}
+.node-dot.warning{background:#fbbf24;box-shadow:0 0 6px rgba(251,191,36,0.4)}
+.node-dot.offline{background:#f87171;box-shadow:0 0 6px rgba(248,113,113,0.3)}
+.node-dot.testing{background:#38bdf8;animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 .node-info{flex:1;min-width:0}
 .node-label{font-size:.8125rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text-primary)}
 .node-meta{font-size:.6875rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .node-badge{font-size:.6rem;font-weight:600;text-transform:uppercase;padding:1px 5px;border-radius:4px;color:var(--accent-pale);background:rgba(124,58,237,0.15);border:1px solid var(--border-accent)}
+.node-actions{display:flex;gap:.25rem}
+.node-action-btn{background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px;border-radius:4px;line-height:0;transition:color .12s}
+.node-action-btn:hover{color:var(--text-primary)}
+/* @mention picker */
+.mention-popup{position:absolute;bottom:100%;left:0;right:0;max-height:200px;overflow-y:auto;background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:4px;display:none;z-index:50;box-shadow:0 -4px 16px rgba(0,0,0,0.3)}
+.mention-popup.show{display:block}
+.mention-item{display:flex;align-items:center;gap:.5rem;padding:.5rem .75rem;cursor:pointer;font-size:.8125rem;transition:background .1s}
+.mention-item:hover,.mention-item.selected{background:rgba(124,58,237,0.12);color:var(--accent-pale)}
+.mention-item .node-dot{width:6px;height:6px}
+/* Remote UI iframe overlay */
+.remote-ui-overlay{position:fixed;inset:0;z-index:200;background:var(--bg-body);display:none;flex-direction:column}
+.remote-ui-overlay.show{display:flex}
+.remote-ui-bar{display:flex;align-items:center;gap:.75rem;padding:.5rem 1rem;background:var(--bg-surface);border-bottom:1px solid var(--border);flex-shrink:0}
+.remote-ui-bar .node-label{font-size:.875rem}
+.remote-ui-frame{flex:1;border:none;width:100%;background:var(--bg-body)}
+/* Nodes toggle button (mobile) */
+.nodes-toggle{display:none;position:fixed;right:.75rem;bottom:5rem;z-index:50;background:var(--bg-surface);border:1px solid var(--border-accent);border-radius:50%;width:44px;height:44px;align-items:center;justify-content:center;cursor:pointer;color:var(--accent-pale);box-shadow:0 2px 8px rgba(0,0,0,0.3);line-height:0}
 
 /* ── Server cards grid ──────────────────────────────── */
 .server-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:1rem}
@@ -491,7 +513,9 @@ body{background:var(--bg-body);color:var(--text-primary);font-family:var(--font)
 .media-opt label{font-size:.625rem}
 .media-opt select{font-size:.6875rem;padding:.1rem .2rem}
 .popover{left:8px;right:8px;min-width:0;max-width:calc(100vw - 16px)}
-.nodes-panel{display:none}
+.nodes-panel{position:fixed;right:0;top:0;bottom:0;z-index:91;transform:translateX(100%);width:260px;min-width:260px;border-left:1px solid var(--border-accent)}
+.nodes-panel.open{transform:translateX(0)}
+.nodes-toggle{display:flex}
 .servers-wrap{padding:1rem}
 .server-grid{grid-template-columns:1fr}
 .server-card-details{grid-template-columns:1fr}
@@ -1667,17 +1691,20 @@ renderMediaSettings()+
 streamInfo+
 '<div class="asset-bar" id="assetBar">'+renderAssetBar()+'</div>'+
 '<div id="uploadPreview"></div>'+
-'<div class="chat-input">'+
+'<div class="chat-input" style="position:relative">'+
+'<div id="mentionPopup" class="mention-popup"></div>'+
 '<div class="chat-input-row">'+
 '<button class="upload-btn" onclick="triggerUpload()" title="Attach file">'+ic('upload',16)+'</button>'+
 '<input type="file" id="fileUpload" style="display:none" onchange="handleUpload(this)">'+
-'<textarea id="chatInput" rows="1" placeholder="Type a message... '+(S.ctrlEnterSend!==false?'(Ctrl+Enter to send)':'(Enter to send)')+'" onkeydown="chatKey(event)" oninput="autoGrow(this)"></textarea>'+
+'<textarea id="chatInput" rows="1" placeholder="Type a message... (use @ to mention a node)" onkeydown="chatKey(event)" oninput="autoGrow(this)"></textarea>'+
 (S.streaming?
 '<button class="btn-stop" onclick="stopChat()">'+ic('stop',16)+' Stop</button>':
 '<button class="btn-send" onclick="sendMsg()">'+ic('send',16)+' Send</button>')+
 '</div></div></div></div>'+
 renderNodesPanel()+
 '</div>'+
+'<button class="nodes-toggle" onclick="toggleNodesPanel()" title="Nodes">'+ic('server',20)+'</button>'+
+'<div class="remote-ui-overlay" id="remoteUiOverlay"></div>'+
 '<div class="msg-actions" id="msgActions">'+
 '<button class="msg-action-btn" data-action="copy" title="Copy">'+ic('copy',14)+'</button>'+
 '<button class="msg-action-btn" data-action="exclude" title="Remove from context">'+ic('xic',14)+'</button>'+
@@ -1904,7 +1931,9 @@ function renderMessage(m,idx){
 if(m.role==='user'){
 var userBody=md(m.content);
 if(m.media&&m.media.length){for(var mi=0;mi<m.media.length;mi++){var mm=m.media[mi];if(mm.type==='image'||mm.type==='image/png'||mm.type==='image/jpeg'){userBody+='<div style="margin-top:.5rem"><img src="'+esc(mm.url)+'" style="max-width:200px;max-height:200px;border-radius:8px;border:1px solid var(--border);cursor:zoom-in" alt="attached" onclick="openLightbox(this.src)"></div>';} else if(mm.type==='video'||mm.type==='video/mp4'){userBody+='<div style="margin-top:.5rem"><video src="'+esc(mm.url)+'" controls preload="metadata" style="max-width:200px;max-height:200px;border-radius:8px;border:1px solid var(--border)"></video></div>';}}}
-return '<div class="msg msg-user'+(m.excluded?' excluded':'')+'" data-idx="'+idx+'"><div class="msg-label">You</div><div class="msg-bubble">'+userBody+'</div></div>';
+var userLabel='You';
+if(m.nodeTarget)userLabel='You '+ic('send',10)+' <span class="node-badge" style="vertical-align:middle">'+esc(m.nodeTarget)+'</span>';
+return '<div class="msg msg-user'+(m.excluded?' excluded':'')+'" data-idx="'+idx+'"><div class="msg-label">'+userLabel+'</div><div class="msg-bubble">'+userBody+'</div></div>';
 }
 var isStreaming=S.streaming&&idx===S.messages.length-1;
 if(!isStreaming&&!m.content&&!m.thinking&&(!m.tools||!m.tools.length)&&(!m.parts||!m.parts.length)&&!m.mediaStatus&&!m.media)return '';
@@ -1944,7 +1973,9 @@ mi++;
 return '<div class="media-embed" style="position:relative">'+btn;
 });
 }
-return '<div class="msg msg-ast'+(m.excluded?' excluded':'')+'" id="msg'+idx+'" data-idx="'+idx+'"><div class="msg-label">Agent</div><div class="msg-bubble">'+body+'</div></div>';
+var astLabel='Agent';
+if(m.nodeSource)astLabel=ic('server',10)+' <span class="node-badge" style="vertical-align:middle">'+esc(m.nodeSource)+'</span>';
+return '<div class="msg msg-ast'+(m.excluded?' excluded':'')+'" id="msg'+idx+'" data-idx="'+idx+'"><div class="msg-label">'+astLabel+'</div><div class="msg-bubble">'+body+'</div></div>';
 }
 
 window.toggleEl=function(head){
@@ -1956,6 +1987,8 @@ function setupChat(){
 var ta=document.getElementById('chatInput');
 if(ta){ta.focus();var draft=localStorage.getItem('ava_draft');if(draft){ta.value=draft;ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,150)+'px';}}
 scrollToBottom(true);setupMsgActions();renderMermaidBlocks();installChatResizeObserver();
+setupMentionPicker();
+if(!S.nodesLoaded)loadChatNodes();
 }
 function renderMermaidBlocks(){
 if(typeof mermaid==='undefined')return;
@@ -2204,6 +2237,37 @@ chatAbort=null;S.streaming=false;render();
 window.sendMsg=function(){
 var inp=document.getElementById('chatInput');if(!inp)return;
 var msg=inp.value.trim();if(!msg||S.streaming)return;
+
+// Detect @node mentions
+var targetNode=null;
+var cleanMsg=msg;
+var atMatch=msg.match(/^@(\S+)\s+([\s\S]*)$/);
+if(atMatch){
+var mentionLabel=atMatch[1];
+cleanMsg=atMatch[2];
+for(var ni=0;ni<S.nodesList.length;ni++){
+if((S.nodesList[ni].label||S.nodesList[ni].ip)===mentionLabel&&S.nodesList[ni].status==='connected'){
+targetNode=S.nodesList[ni];break;
+}
+}
+}
+
+// If a node is selected in the sidebar, route to it
+if(!targetNode&&S.activeNodeId){
+for(var ni=0;ni<S.nodesList.length;ni++){
+if(S.nodesList[ni].id===S.activeNodeId&&S.nodesList[ni].status==='connected'){
+targetNode=S.nodesList[ni];break;
+}
+}
+}
+
+if(targetNode){
+inp.value='';inp.style.height='auto';localStorage.removeItem('ava_draft');
+S.messages.push({role:'user',content:msg,nodeTarget:targetNode.label});
+sendToNode(targetNode,cleanMsg);
+return;
+}
+
 if(!S.hasXaiKey){
 S.messages.push({role:'user',content:msg});
 S.messages.push({role:'assistant',content:'The xAI API Key has not been configured. Please go to [Settings](#/settings) to set your key to chat.',thinking:'',thinkingDone:true,tools:[],parts:[],temp:true});
@@ -2228,6 +2292,66 @@ S.messages.push({role:'user',content:msg,media:ctxMedia.length?ctxMedia:undefine
 doSendChat(msg,[]);
 }
 };
+
+function sendToNode(node,message){
+S.streaming=true;S.streamStart=Date.now();
+var aMsg={role:'assistant',content:'',thinking:'',thinkingDone:false,tools:[],parts:[],nodeSource:node.label};
+S.messages.push(aMsg);
+render();scrollToBottom(true);
+
+var h={'Content-Type':'application/json'};
+var t=localStorage.getItem('avacli_token');if(t)h['Authorization']='Bearer '+t;
+if(S.token)h['Authorization']='Bearer '+S.token;
+
+fetch('/api/nodes/'+encodeURIComponent(node.id)+'/chat',{
+method:'POST',headers:h,
+body:JSON.stringify({message:message,model:S.model||'',session:''})
+}).then(function(res){
+if(!res.ok)return res.text().then(function(t){throw new Error(t||'Node chat failed');});
+var reader=res.body.getReader(),dec=new TextDecoder(),buf='';
+function handleLine(ln){
+if(!ln.startsWith('data: '))return;
+var d;try{d=JSON.parse(ln.slice(6));}catch(x){return;}
+if(d.type==='content_delta'){
+aMsg.content+=(d.content||'');
+var lp=aMsg.parts.length?aMsg.parts[aMsg.parts.length-1]:null;
+if(!lp||lp.type!=='content'){aMsg.parts.push({type:'content',text:d.content||''});}
+else{lp.text+=(d.content||'');}
+}else if(d.type==='thinking_delta'){
+aMsg.thinking+=(d.content||'');
+var lpt=aMsg.parts.length?aMsg.parts[aMsg.parts.length-1]:null;
+if(!lpt||lpt.type!=='thinking'){aMsg.parts.push({type:'thinking',text:d.content||'',done:false});}
+else{lpt.text+=(d.content||'');}
+}else if(d.type==='thinking_done'){
+aMsg.thinkingDone=true;
+for(var ti=aMsg.parts.length-1;ti>=0;ti--){if(aMsg.parts[ti].type==='thinking'){aMsg.parts[ti].done=true;break;}}
+}else if(d.type==='tool_start'){
+aMsg.tools.push({name:d.name||'tool',args:d.arguments||{},result:null,success:null,done:false,startTime:Date.now()});
+aMsg.parts.push({type:'tool',toolIdx:aMsg.tools.length-1});
+}else if(d.type==='tool_done'){
+var tf=null;for(var j=aMsg.tools.length-1;j>=0;j--){if(aMsg.tools[j].name===(d.name||'')&&!aMsg.tools[j].done){tf=aMsg.tools[j];break;}}
+if(tf){tf.result=d.result;tf.success=d.success!==false;tf.done=true;tf.duration=Date.now()-(tf.startTime||Date.now());}
+}else if(d.type==='done'||d.type==='node_done'){
+S.streaming=false;render();return;
+}
+scheduleStreamUpdate(aMsg);
+}
+function pump(){
+return reader.read().then(function(r){
+if(r.value)buf+=dec.decode(r.value,{stream:!r.done});
+if(r.done){S.streaming=false;render();return;}
+var lines=buf.split('\n');buf=lines.pop()||'';
+for(var i=0;i<lines.length;i++)handleLine(lines[i]);
+return pump();
+});
+}
+return pump();
+}).catch(function(e){
+toast('Node error: '+e.message,'error');
+if(!aMsg.content)aMsg.content='*Error reaching node '+node.label+': '+e.message+'*';
+S.streaming=false;render();
+});
+}
 
 function renderDiffBlock(diff){
 var lines=diff.split('\n');
@@ -2491,8 +2615,185 @@ render();
 restoreToolbarPopover('notesPop');
 };
 
-/* ── Nodes Panel (removed — no platform node sync) ── */
-function renderNodesPanel(){return '';}
+/* ── Nodes Panel ──────────────────────────────────────── */
+S.nodesList=[];S.nodesLoaded=false;S.nodesPanelOpen=false;S.mentionActive=false;S.mentionIdx=0;S.activeNodeId=null;
+
+function renderNodesPanel(){
+var h='<div class="nodes-panel'+(S.nodesPanelOpen?' open':'')+'" id="nodesPanel">';
+h+='<div class="nodes-panel-head"><span>'+ic('server',14)+' Nodes</span>';
+h+='<button class="node-action-btn" onclick="refreshNodes()" title="Refresh">'+ic('refresh',14)+'</button></div>';
+h+='<div class="nodes-panel-list" id="nodesPanelList">';
+h+='<div class="node-item self" onclick="go(\'/servers\')"><div class="node-dot online"></div>';
+h+='<div class="node-info"><div class="node-label">'+ic('dot',8)+' Local</div>';
+h+='<div class="node-meta">'+esc(S.status?S.status.workspace:'this node')+'</div></div>';
+h+='<div class="node-badge">self</div></div>';
+if(!S.nodesLoaded){
+h+='<div style="padding:.75rem;text-align:center"><div class="spinner" style="width:16px;height:16px;border-width:2px;margin:0 auto"></div></div>';
+}else{
+for(var i=0;i<S.nodesList.length;i++){
+var n=S.nodesList[i];
+var dotCls='offline';
+if(n.status==='connected')dotCls=n.latency_ms>500?'warning':'online';
+else if(n.status==='testing')dotCls='testing';
+var active=S.activeNodeId===n.id?' active':'';
+h+='<div class="node-item'+active+'" data-node-id="'+esc(n.id)+'" onclick="onNodeClick(\''+esc(n.id)+'\')">';
+h+='<div class="node-dot '+dotCls+'"></div>';
+h+='<div class="node-info"><div class="node-label">'+esc(n.label||n.ip)+'</div>';
+h+='<div class="node-meta">'+esc(n.ip)+':'+esc(String(n.port||8080));
+if(n.latency_ms>0)h+=' &middot; '+n.latency_ms+'ms';
+if(n.version)h+=' &middot; v'+esc(n.version);
+h+='</div></div>';
+if(n.status==='connected')h+='<button class="node-action-btn" onclick="event.stopPropagation();openRemoteUI(\''+esc(n.id)+'\',\''+esc(n.label||n.ip)+'\')" title="Open remote UI">'+ic('globe',12)+'</button>';
+h+='</div>';
+}
+if(!S.nodesList.length){
+h+='<div style="padding:1rem;text-align:center;color:var(--text-muted);font-size:.75rem">No nodes yet.<br><a href="#/servers" style="color:var(--accent-light)">Add one</a></div>';
+}
+}
+h+='</div></div>';
+return h;
+}
+
+function loadChatNodes(){
+api('/api/nodes',{silent:true}).then(function(d){
+S.nodesList=(d&&d.nodes)?d.nodes:[];
+S.nodesLoaded=true;
+var list=document.getElementById('nodesPanelList');
+if(list){
+var panel=document.getElementById('nodesPanel');
+if(panel)panel.outerHTML=renderNodesPanel();
+}
+}).catch(function(){S.nodesLoaded=true;});
+}
+
+window.refreshNodes=function(){
+S.nodesLoaded=false;
+var list=document.getElementById('nodesPanelList');
+if(list)list.innerHTML='<div style="padding:.75rem;text-align:center"><div class="spinner" style="width:16px;height:16px;border-width:2px;margin:0 auto"></div></div>';
+loadChatNodes();
+};
+
+window.onNodeClick=function(id){
+if(S.activeNodeId===id){S.activeNodeId=null;}
+else{S.activeNodeId=id;}
+var items=document.querySelectorAll('.node-item[data-node-id]');
+items.forEach(function(el){el.classList.toggle('active',el.getAttribute('data-node-id')===S.activeNodeId);});
+};
+
+window.toggleNodesPanel=function(){
+S.nodesPanelOpen=!S.nodesPanelOpen;
+var panel=document.getElementById('nodesPanel');
+if(panel)panel.classList.toggle('open',S.nodesPanelOpen);
+};
+
+/* ── @mention picker ─────────────────────────────────── */
+function setupMentionPicker(){
+var inp=document.getElementById('chatInput');if(!inp)return;
+var popup=document.getElementById('mentionPopup');if(!popup)return;
+
+inp.addEventListener('input',function(){
+var val=inp.value;
+var cursor=inp.selectionStart;
+var before=val.substring(0,cursor);
+var atIdx=before.lastIndexOf('@');
+if(atIdx<0||atIdx>0&&before[atIdx-1]!==' '&&before[atIdx-1]!=='\n'){
+popup.classList.remove('show');S.mentionActive=false;return;
+}
+var query=before.substring(atIdx+1).toLowerCase();
+var connected=S.nodesList.filter(function(n){return n.status==='connected';});
+var matches=connected.filter(function(n){
+return (n.label||n.ip).toLowerCase().indexOf(query)>=0;
+});
+if(!matches.length){popup.classList.remove('show');S.mentionActive=false;return;}
+S.mentionActive=true;S.mentionIdx=0;S.mentionMatches=matches;S.mentionAtIdx=atIdx;
+renderMentionPopup();
+});
+inp.addEventListener('keydown',function(e){
+if(!S.mentionActive)return;
+if(e.key==='ArrowDown'){e.preventDefault();S.mentionIdx=Math.min(S.mentionIdx+1,S.mentionMatches.length-1);renderMentionPopup();}
+else if(e.key==='ArrowUp'){e.preventDefault();S.mentionIdx=Math.max(S.mentionIdx-1,0);renderMentionPopup();}
+else if(e.key==='Enter'||e.key==='Tab'){
+if(S.mentionActive&&S.mentionMatches.length){e.preventDefault();insertMention(S.mentionMatches[S.mentionIdx]);}
+}
+else if(e.key==='Escape'){popup.classList.remove('show');S.mentionActive=false;}
+});
+}
+
+function renderMentionPopup(){
+var popup=document.getElementById('mentionPopup');if(!popup)return;
+var h='';
+for(var i=0;i<S.mentionMatches.length;i++){
+var n=S.mentionMatches[i];
+var sel=i===S.mentionIdx?' selected':'';
+var dotCls=n.latency_ms>500?'warning':'online';
+h+='<div class="mention-item'+sel+'" onmousedown="insertMention(S.mentionMatches['+i+'])">';
+h+='<div class="node-dot '+dotCls+'"></div>';
+h+='<span>'+esc(n.label||n.ip)+'</span>';
+if(n.latency_ms>0)h+='<span style="font-size:.6875rem;color:var(--text-muted);margin-left:auto">'+n.latency_ms+'ms</span>';
+h+='</div>';
+}
+popup.innerHTML=h;
+popup.classList.add('show');
+}
+
+window.insertMention=function(node){
+var inp=document.getElementById('chatInput');if(!inp)return;
+var popup=document.getElementById('mentionPopup');if(popup)popup.classList.remove('show');
+S.mentionActive=false;
+var val=inp.value;
+var cursor=inp.selectionStart;
+var before=val.substring(0,S.mentionAtIdx);
+var after=val.substring(cursor);
+var tag='@'+node.label+' ';
+inp.value=before+tag+after;
+inp.selectionStart=inp.selectionEnd=before.length+tag.length;
+inp.focus();
+};
+
+/* ── Remote UI overlay ───────────────────────────────── */
+window.openRemoteUI=function(nodeId,label){
+var overlay=document.getElementById('remoteUiOverlay');if(!overlay)return;
+overlay.innerHTML='<div class="remote-ui-bar">'+
+'<button class="node-action-btn" onclick="closeRemoteUI()" style="padding:6px" title="Back">'+ic('chevLeft',18)+'</button>'+
+'<div class="node-dot online"></div>'+
+'<div class="node-label">'+esc(label)+'</div>'+
+'<div class="node-badge">remote</div>'+
+'<div style="flex:1"></div>'+
+'<button class="node-action-btn" onclick="window.open(\'/api/nodes/'+esc(nodeId)+'/proxy/\',\'_blank\')" title="Open in new tab">'+ic('globe',14)+'</button>'+
+'<button class="node-action-btn" onclick="closeRemoteUI()" title="Close">'+ic('xic',16)+'</button>'+
+'</div>'+
+'<iframe class="remote-ui-frame" src="/api/nodes/'+esc(nodeId)+'/proxy/"></iframe>';
+overlay.classList.add('show');
+};
+
+window.closeRemoteUI=function(){
+var overlay=document.getElementById('remoteUiOverlay');if(!overlay)return;
+overlay.classList.remove('show');
+setTimeout(function(){overlay.innerHTML='';},300);
+};
+
+/* ── Mobile swipe for nodes panel ────────────────────── */
+(function(){
+var touchStartX=0,touchStartY=0,swiping=false;
+document.addEventListener('touchstart',function(e){
+if(S.route!=='/chat')return;
+var t=e.touches[0];touchStartX=t.clientX;touchStartY=t.clientY;swiping=false;
+},{passive:true});
+document.addEventListener('touchmove',function(e){
+if(S.route!=='/chat')return;
+var t=e.touches[0];
+var dx=t.clientX-touchStartX;
+var dy=t.clientY-touchStartY;
+if(!swiping&&Math.abs(dx)>Math.abs(dy)&&Math.abs(dx)>20)swiping=true;
+if(!swiping)return;
+var panel=document.getElementById('nodesPanel');if(!panel)return;
+if(!S.nodesPanelOpen&&dx<-40&&touchStartX>window.innerWidth*0.6){
+S.nodesPanelOpen=true;panel.classList.add('open');
+}else if(S.nodesPanelOpen&&dx>40){
+S.nodesPanelOpen=false;panel.classList.remove('open');
+}
+},{passive:true});
+})();
 
 /* ── Message Actions (hover toolbar) ─────────────────── */
 var hoveredMsgEl=null,lastActionClientY=0;
@@ -4075,9 +4376,12 @@ if(!ip.trim()){toast('Host is required','error');return;}
 var body={ip:ip.trim(),port:parseInt(port)||8080,label:label.trim()||ip.trim()};
 if(username.trim())body.username=username.trim();
 if(password)body.password=password;
-api('/api/nodes',{method:'POST',body:body}).then(function(){
-toast('Node added','success');closeAddNodeModal();loadNodes();
-}).catch(function(e){toast('Failed: '+(e.message||e),'error');});
+var btn=document.querySelector('#nodeModalRoot .btn-deploy');
+if(btn){btn.disabled=true;btn.innerHTML='<div class="spinner" style="width:14px;height:14px;border-width:2px;display:inline-block;vertical-align:middle"></div> Testing connection...';}
+api('/api/nodes',{method:'POST',body:body}).then(function(d){
+toast('Node added — connection test in progress','success');closeAddNodeModal();loadNodes();
+S.nodesLoaded=false;loadChatNodes();
+}).catch(function(e){toast('Failed: '+(e.message||e),'error');if(btn){btn.disabled=false;btn.innerHTML=ic('plus',14)+' Add Node';}});
 };
 function loadNodes(){
 api('/api/nodes',{silent:true}).then(function(data){
@@ -4090,23 +4394,41 @@ return;
 var html='<div class="server-grid">';
 for(var i=0;i<nodes.length;i++){
 var n=nodes[i];
+var st=n.status||'unknown';
+var stColor=st==='connected'?'#4ade80':(st==='testing'?'#38bdf8':(st==='auth_failed'?'#fbbf24':'#f87171'));
+var stLabel=st==='connected'?'connected':(st==='testing'?'testing...':(st==='auth_failed'?'auth failed':(st==='provisioning'?'provisioning':(st==='not_avacli'?'not avacli':'unreachable'))));
 html+='<div class="server-card">'+
 '<div class="server-card-header"><span class="server-card-name">'+esc(n.label||n.ip)+'</span>'+
-'<div class="server-card-status"><span class="status-dot online"></span> added</div></div>'+
+'<div class="server-card-status"><span class="status-dot" style="background:'+stColor+'"></span> '+stLabel+'</div></div>'+
 '<div class="server-card-details">'+
 '<div>Host: <span style="font-family:var(--mono)">'+esc(n.ip)+'</span></div>'+
 '<div>Port: '+esc(String(n.port||8080))+'</div>'+
-(n.username?'<div>User: <span style="font-family:var(--mono)">'+esc(n.username)+'</span>'+(n.has_password?' '+ic('lock',10):'')+'</div>':'')+
+(n.latency_ms>0?'<div>Latency: <span style="font-family:var(--mono);color:'+(n.latency_ms>500?'#fbbf24':'#4ade80')+'">'+n.latency_ms+'ms</span></div>':'')+
+(n.version?'<div>Version: <span style="font-family:var(--mono)">'+esc(n.version)+'</span></div>':'')+
+(n.workspace?'<div>Workspace: '+esc(n.workspace)+'</div>':'')+
+(n.username?'<div>User: <span style="font-family:var(--mono)">'+esc(n.username)+'</span></div>':'')+
+(n.vultr_instance_id?'<div>Vultr: <span style="font-family:var(--mono);font-size:.75rem">'+esc(n.vultr_instance_id)+'</span></div>':'')+
 '</div>'+
 '<div class="server-card-actions">'+
+'<button onclick="testNode(\''+esc(n.id)+'\',this)">'+ic('refresh',14)+' Test</button>'+
+(st==='connected'?'<button onclick="openRemoteUI(\''+esc(n.id)+'\',\''+esc(n.label||n.ip)+'\')">'+ic('globe',14)+' Remote UI</button>':'')+
 '<button onclick="window.open(\'http://'+esc(n.ip)+':'+esc(String(n.port||8080))+'\')" >'+ic('globe',14)+' Open</button>'+
-'<button onclick="deleteNode(\''+esc(n.id)+'\',\''+esc(n.label||n.ip)+'\' )" style="color:#f87171">'+ic('trash',14)+' Remove</button>'+
+'<button onclick="deleteNode(\''+esc(n.id)+'\',\''+esc(n.label||n.ip)+'\')" style="color:#f87171">'+ic('trash',14)+' Remove</button>'+
 '</div></div>';
 }
 html+='</div>';
 list.innerHTML=html;
 }).catch(function(){var l=document.getElementById('nodesList');if(l)l.innerHTML='<div style="color:var(--text-muted);text-align:center;padding:2rem">Could not load nodes</div>';});
 }
+
+window.testNode=function(id,btn){
+if(btn){btn.disabled=true;btn.innerHTML=ic('refresh',14)+' Testing...';}
+api('/api/nodes/'+encodeURIComponent(id)+'/test',{method:'POST'}).then(function(d){
+var st=d.status||'unknown';
+toast('Node '+st+(d.latency_ms>0?' ('+d.latency_ms+'ms)':''),'info');
+loadNodes();
+}).catch(function(e){toast('Test failed: '+(e.message||e),'error');loadNodes();});
+};
 window.deleteNode=function(id,name){
 avaConfirm('Remove node "'+name+'"?',function(){
 api('/api/nodes/'+encodeURIComponent(id),{method:'DELETE'}).then(function(){toast('Node removed','success');loadNodes();}).catch(function(e){toast('Failed: '+(e.message||e),'error');});

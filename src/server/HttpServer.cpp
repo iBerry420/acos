@@ -8,6 +8,7 @@
 #include "tools/ToolRegistry.hpp"
 #include "platform/Paths.hpp"
 #include "db/Database.hpp"
+#include "services/MeshManager.hpp"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -50,7 +51,10 @@ void HttpServer::start() {
     std::cout << "\nAvacli running at http://localhost:" << port
               << "  (Ctrl+C to stop)\n\n" << std::flush;
 
+    MeshManager::instance().start();
+
     impl_->svr.listen(config_.host, port);
+    MeshManager::instance().stop();
     running_ = false;
 }
 
@@ -110,7 +114,9 @@ void HttpServer::setupRoutes() {
             && req.path.rfind("/api/", 0) == 0) {
             if (req.path != "/api/auth/login" && req.path != "/api/auth/status"
                 && req.path.rfind("/api/auth/status", 0) != 0
-                && req.path != "/api/auth/accounts") {
+                && req.path != "/api/auth/accounts"
+                && req.path != "/api/health"
+                && req.path != "/api/mesh/sync") {
                 std::string authHeader = req.get_header_value("Authorization");
                 bool authed = false;
                 if (authHeader.size() > 7 && authHeader.substr(0, 7) == "Bearer ") {

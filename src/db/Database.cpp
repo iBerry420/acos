@@ -1,7 +1,10 @@
 #include "db/Database.hpp"
 #include "platform/Paths.hpp"
 #include <spdlog/spdlog.h>
+#include <nlohmann/json.hpp>
+#include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <stdexcept>
 
 namespace avacli {
@@ -255,6 +258,74 @@ void Database::migrate() {
         if (err) { sqlite3_free(err); err = nullptr; }
         setVersion(2);
         spdlog::info("Database migrated to v2 (apps.icon_url)");
+    }
+
+    if (ver < 3) {
+        sqlite3_exec(db_, R"(
+            CREATE TABLE IF NOT EXISTS nodes (
+                id TEXT PRIMARY KEY,
+                ip TEXT NOT NULL,
+                port INTEGER DEFAULT 8080,
+                domain TEXT DEFAULT '',
+                label TEXT DEFAULT '',
+                username TEXT DEFAULT '',
+                auth_token TEXT DEFAULT '',
+                status TEXT DEFAULT 'unknown',
+                latency_ms INTEGER DEFAULT -1,
+                version TEXT DEFAULT '',
+                workspace TEXT DEFAULT '',
+                vultr_instance_id TEXT DEFAULT '',
+                added_at INTEGER NOT NULL,
+                last_seen INTEGER DEFAULT 0,
+                last_sync INTEGER DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_nodes_status ON nodes(status);
+
+            CREATE TABLE IF NOT EXISTS mesh_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_type TEXT NOT NULL,
+                node_id TEXT DEFAULT '',
+                source_node_id TEXT DEFAULT '',
+                payload TEXT DEFAULT '{}',
+                created_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_mesh_events_ts ON mesh_events(created_at);
+            CREATE INDEX IF NOT EXISTS idx_mesh_events_type ON mesh_events(event_type);
+        )", nullptr, nullptr, &err);
+        if (err) { spdlog::error("Migration v3 error: {}", err); sqlite3_free(err); err = nullptr; }
+
+        // Migrate existing nodes.json into SQLite
+        auto home = std::string(std::getenv("HOME") ? std::getenv("HOME") : ".");
+        auto jsonPath = (fs::path(home) / ".avacli" / "nodes.json").string();
+        if (fs::exists(jsonPath)) {
+            try {
+                std::ifstream f(jsonPath);
+                auto arr = nlohmann::json::parse(f);
+                for (const auto& n : arr) {
+                    auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+                    std::string id = n.value("id", std::to_string(now));
+                    std::string ip = n.value("ip", "");
+                    int port = n.value("port", 8080);
+                    std::string label = n.value("label", ip);
+                    std::string domain = n.value("domain", "");
+                    std::string username = n.value("username", "");
+                    int64_t addedAt = n.value("added_at", now);
+
+                    auto sql = "INSERT OR IGNORE INTO nodes (id, ip, port, domain, label, username, added_at) "
+                               "VALUES ('" + id + "', '" + ip + "', " + std::to_string(port) +
+                               ", '" + domain + "', '" + label + "', '" + username + "', " +
+                               std::to_string(addedAt) + ")";
+                    sqlite3_exec(db_, sql.c_str(), nullptr, nullptr, nullptr);
+                }
+                spdlog::info("Migrated {} nodes from nodes.json to SQLite", arr.size());
+            } catch (const std::exception& ex) {
+                spdlog::warn("Could not migrate nodes.json: {}", ex.what());
+            }
+        }
+
+        setVersion(3);
+        spdlog::info("Database migrated to v3 (nodes + mesh_events)");
     }
 }
 
