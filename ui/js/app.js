@@ -1079,6 +1079,9 @@ return '<div class="toolbar">'+
 '<div class="popover" id="notesPop">'+renderNotesPopover()+'</div>'+
 '</div>'+
 '<div class="toolbar-spacer"></div>'+
+'<div class="toolbar-group toolbar-nodes-btn">'+
+'<button class="toolbar-btn" onclick="toggleNodesPanel()" title="Nodes">'+ic('server',15)+' <span>Nodes</span></button>'+
+'</div>'+
 '<div class="toolbar-group" style="position:relative">'+
 '<button class="toolbar-btn" onclick="avaOpenToolbarPopover(event,\'inputSettingsPop\')" title="Chat Settings">'+ic('gear',15)+' <span>'+(function(){var m=getModelMeta(S.model);return m?(m.name||m.id).split('-').slice(0,3).join('-'):'Model';})()+' '+ic('chevD',10)+'</span></button>'+
 '<div class="popover" id="inputSettingsPop" style="min-width:260px">'+
@@ -2287,7 +2290,8 @@ return '<div class="ide-header" style="display:flex;align-items:center;justify-c
 function setupIdeAfterRender(){
 renderFileTree();
 if(window._pendingAppDir){
-var parts=window._pendingAppDir.split('/');
+var targetDir=window._pendingAppDir;
+var parts=targetDir.split('/');
 var expanding='';
 var chain=[];
 for(var i=0;i<parts.length;i++){
@@ -2296,7 +2300,10 @@ chain.push(expanding);
 }
 delete window._pendingAppDir;
 function expandNext(idx){
-if(idx>=chain.length)return;
+if(idx>=chain.length){
+if(typeof openFileTree==='function')openFileTree();
+return;
+}
 expandedDirs[chain[idx]]=true;
 if(!dirCache[chain[idx]]){
 loadDir(chain[idx],function(){renderFileTree();expandNext(idx+1);});
@@ -3245,7 +3252,7 @@ window.genAppIcon=function(id,name){
 avaPrompt('Describe the icon you want:','A modern minimalist app icon for '+name,function(desc){
 if(!desc||!desc.trim())return;
 toast('Generating icon...','info');
-api('/api/apps/'+encodeURIComponent(id)+'/generate-icon',{method:'POST',body:{prompt:desc.trim()}}).then(function(d){
+api('/api/apps/'+encodeURIComponent(id)+'/generate-icon',{method:'POST',body:{prompt:desc.trim(),model:'grok-2-image',size:'1024x1024'}}).then(function(d){
 if(d&&d.icon_url){toast('Icon set!','success');appsState.apps=null;render();}
 else toast('No image returned','error');
 }).catch(function(e){toast('Failed: '+(e.message||'error'),'error');});
@@ -3255,10 +3262,13 @@ else toast('No image returned','error');
 window.editAppFiles=function(id,slug){
 toast('Exporting to workspace...','info');
 api('/api/apps/'+encodeURIComponent(id)+'/export',{method:'POST'}).then(function(d){
-if(d&&d.path){
-window._pendingAppDir='apps/'+slug;
+if(d&&(d.path||d.exported)){
+dirCache={};
+window._pendingAppDir=d.path||('apps/'+slug);
 navigate('/files');
-toast('App files in apps/'+slug+'/','success');
+toast('App files in '+(d.path||('apps/'+slug))+'/','success');
+}else{
+toast('Export returned no path','error');
 }
 }).catch(function(e){toast('Export failed: '+(e.message||'error'),'error');});
 };
@@ -3429,7 +3439,8 @@ return;
 el.innerHTML='<div style="display:flex;justify-content:center;padding:1rem"><div class="spinner"></div></div>';
 api('/api/vultr/account',{silent:true}).then(function(d){
 vultrAccountCache=d;
-var acct=d&&d.account&&d.account.account?d.account.account:{};
+var rawAcct=d&&d.account?d.account:{};
+var acct=rawAcct.account?rawAcct.account:(rawAcct.balance!=null||rawAcct.name?rawAcct:{});
 var bw=d&&d.bandwidth&&d.bandwidth.bandwidth?d.bandwidth.bandwidth:null;
 var pend=d&&d.pending_charges;
 var name=acct.name||'\u2014';
@@ -3473,7 +3484,7 @@ html+='<a href="https://my.vultr.com/billing/#/addFunds" target="_blank" rel="no
 html+='</div>';
 el.innerHTML=html;
 }).catch(function(e){
-el.innerHTML='<div style="color:var(--text-muted);padding:1rem">'+esc(e.message||'Could not load Vultr account')+'</div>';
+el.innerHTML='<div style="color:#f87171;padding:1rem;font-size:.875rem">'+ic('xic',14)+' '+esc(e.message||'Could not load Vultr account')+' &mdash; check your Vultr API key in Settings.</div>';
 });
 }
 

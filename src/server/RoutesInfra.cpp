@@ -100,12 +100,17 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
             res.set_content(R"({"error":"Vultr API key not configured. Add it in Settings."})", "application/json");
             return;
         }
-        VultrClient vc(key);
-        nlohmann::json out;
-        out["account"] = vc.getAccount();
-        out["bandwidth"] = vc.getAccountBandwidth();
-        out["pending_charges"] = vc.listPendingCharges();
-        res.set_content(out.dump(), "application/json");
+        try {
+            VultrClient vc(key);
+            nlohmann::json out;
+            out["account"] = vc.getAccount();
+            try { out["bandwidth"] = vc.getAccountBandwidth(); } catch (...) { out["bandwidth"] = nlohmann::json::object(); }
+            try { out["pending_charges"] = vc.listPendingCharges(); } catch (...) { out["pending_charges"] = nlohmann::json::object(); }
+            res.set_content(out.dump(), "application/json");
+        } catch (const std::exception& e) {
+            res.status = 502;
+            res.set_content(nlohmann::json({{"error", std::string("Vultr API error: ") + e.what()}}).dump(), "application/json");
+        }
     });
 
     svr.Get("/api/vultr/instances", [ctx](const httplib::Request&, httplib::Response& res) {

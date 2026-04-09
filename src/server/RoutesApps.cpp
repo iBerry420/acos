@@ -450,16 +450,22 @@ void registerAppRoutes(httplib::Server& svr, ServerContext ctx) {
         }
 
         try {
+            std::string model = body.value("model", "grok-2-image");
+            std::string size = body.value("size", "1024x1024");
+
             nlohmann::json reqBody;
-            reqBody["model"] = "grok-imagine-image";
-            reqBody["prompt"] = "App icon, square, 1024x1024, no text: " + prompt;
+            reqBody["model"] = model;
+            reqBody["prompt"] = prompt;
             reqBody["n"] = 1;
+            reqBody["size"] = size;
             reqBody["response_format"] = "url";
 
             auto resp = curlPostJson("https://api.x.ai/v1/images/generations", reqBody.dump(), apiKey);
             if (!resp.ok()) {
+                std::string detail;
+                try { auto j = nlohmann::json::parse(resp.body); detail = j.value("error", resp.body); } catch (...) { detail = resp.body; }
                 res.status = 502;
-                res.set_content(nlohmann::json({{"error", "Image API error: " + std::to_string(resp.status)}}).dump(), "application/json");
+                res.set_content(nlohmann::json({{"error", "Image API error (" + std::to_string(resp.status) + "): " + detail}}).dump(), "application/json");
                 return;
             }
 

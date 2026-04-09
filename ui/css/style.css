@@ -431,7 +431,8 @@ body{background:var(--bg-body);color:var(--text-primary);font-family:var(--font)
 .remote-ui-bar .node-label{font-size:.875rem}
 .remote-ui-frame{flex:1;border:none;width:100%;background:var(--bg-body)}
 /* Nodes toggle button (mobile) */
-.nodes-toggle{display:none;position:fixed;right:.75rem;bottom:5rem;z-index:50;background:var(--bg-surface);border:1px solid var(--border-accent);border-radius:50%;width:44px;height:44px;align-items:center;justify-content:center;cursor:pointer;color:var(--accent-pale);box-shadow:0 2px 8px rgba(0,0,0,0.3);line-height:0}
+.nodes-toggle{display:none}
+.toolbar-nodes-btn{display:none}
 
 /* ── Server cards grid ──────────────────────────────── */
 .server-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:1rem}
@@ -480,7 +481,7 @@ body{background:var(--bg-body);color:var(--text-primary);font-family:var(--font)
 .popover{left:8px;right:8px;min-width:0;max-width:calc(100vw - 16px)}
 .nodes-panel{position:fixed;right:0;top:0;bottom:0;z-index:91;transform:translateX(100%);width:260px;min-width:260px;border-left:1px solid var(--border-accent)}
 .nodes-panel.open{transform:translateX(0)}
-.nodes-toggle{display:flex}
+.toolbar-nodes-btn{display:flex}
 .servers-wrap{padding:1rem}
 .server-grid{grid-template-columns:1fr}
 .server-card-details{grid-template-columns:1fr}
