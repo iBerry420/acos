@@ -1377,8 +1377,11 @@ std::string ToolExecutor::execute(const std::string& name, const std::string& ar
                 std::string requestId = submitResult.value("request_id", "");
                 if (requestId.empty()) {
                     std::string videoUrl;
-                    if (submitResult.contains("video") && submitResult["video"].contains("url"))
-                        videoUrl = submitResult["video"]["url"].get<std::string>();
+                    if (submitResult.contains("video") && submitResult["video"].is_object()) {
+                        auto& vid = submitResult["video"];
+                        if (vid.contains("url") && vid["url"].is_string())
+                            videoUrl = vid["url"].get<std::string>();
+                    }
                     if (!videoUrl.empty()) {
                         std::string mediaDir = (fs::path(workspace_) / "uploads" / "avacli-media").string();
                         fs::create_directories(mediaDir);
@@ -1392,10 +1395,10 @@ std::string ToolExecutor::execute(const std::string& name, const std::string& ar
                             return j.dump();
                         }
                     }
+                    spdlog::warn("generate_video: no request_id in submit response: {}", submitResp.body.substr(0, 500));
                     return R"({"error": "No request_id or video_url in response"})";
                 }
 
-                // Poll for completion
                 std::string pollUrl = "https://api.x.ai/v1/videos/" + requestId;
                 for (int attempt = 0; attempt < 60; ++attempt) {
                     std::this_thread::sleep_for(std::chrono::seconds(5));
@@ -1403,11 +1406,16 @@ std::string ToolExecutor::execute(const std::string& name, const std::string& ar
                     if (!pollResp.ok()) continue;
 
                     auto pollResult = nlohmann::json::parse(pollResp.body);
-                    std::string status = pollResult.value("status", "");
+                    std::string status;
+                    if (pollResult.contains("status") && pollResult["status"].is_string())
+                        status = pollResult["status"].get<std::string>();
                     if (status == "done") {
                         std::string videoUrl;
-                        if (pollResult.contains("video") && pollResult["video"].contains("url"))
-                            videoUrl = pollResult["video"]["url"].get<std::string>();
+                        if (pollResult.contains("video") && pollResult["video"].is_object()) {
+                            auto& vid = pollResult["video"];
+                            if (vid.contains("url") && vid["url"].is_string())
+                                videoUrl = vid["url"].get<std::string>();
+                        }
                         if (!videoUrl.empty()) {
                             std::string mediaDir = (fs::path(workspace_) / "uploads" / "avacli-media").string();
                             fs::create_directories(mediaDir);
@@ -1424,12 +1432,20 @@ std::string ToolExecutor::execute(const std::string& name, const std::string& ar
                         }
                         return R"({"error": "Video completed but no download URL found"})";
                     } else if (status == "failed" || status == "expired") {
+                        std::string errMsg = "unknown";
+                        if (pollResult.contains("error")) {
+                            auto& e = pollResult["error"];
+                            if (e.is_object())
+                                errMsg = e.value("message", e.value("code", "unknown"));
+                            else if (e.is_string())
+                                errMsg = e.get<std::string>();
+                        }
+                        spdlog::warn("generate_video failed: {}", pollResp.body.substr(0, 500));
                         nlohmann::json j;
-                        j["error"] = "Video generation failed: " + pollResult.value("error", "unknown");
+                        j["error"] = "Video generation failed: " + errMsg;
                         j["request_id"] = requestId;
                         return j.dump();
                     }
-                    // Still pending, continue polling
                 }
                 return R"({"error": "Video generation timed out after 5 minutes"})";
             } catch (const std::exception& e) {
@@ -1479,11 +1495,16 @@ std::string ToolExecutor::execute(const std::string& name, const std::string& ar
                     auto pollResp = httpGet(pollUrl, apiKey);
                     if (!pollResp.ok()) continue;
                     auto pollResult = nlohmann::json::parse(pollResp.body);
-                    std::string status = pollResult.value("status", "");
+                    std::string status;
+                    if (pollResult.contains("status") && pollResult["status"].is_string())
+                        status = pollResult["status"].get<std::string>();
                     if (status == "done") {
                         std::string videoUrl;
-                        if (pollResult.contains("video") && pollResult["video"].contains("url"))
-                            videoUrl = pollResult["video"]["url"].get<std::string>();
+                        if (pollResult.contains("video") && pollResult["video"].is_object()) {
+                            auto& vid = pollResult["video"];
+                            if (vid.contains("url") && vid["url"].is_string())
+                                videoUrl = vid["url"].get<std::string>();
+                        }
                         if (!videoUrl.empty()) {
                             std::string mediaDir = (fs::path(workspace_) / "uploads" / "avacli-media").string();
                             fs::create_directories(mediaDir);
@@ -1494,7 +1515,16 @@ std::string ToolExecutor::execute(const std::string& name, const std::string& ar
                         }
                         return R"({"error": "Video edit completed but no download URL"})";
                     } else if (status == "failed" || status == "expired") {
-                        return nlohmann::json({{"error","Video edit failed: "+pollResult.value("error","unknown")},{"request_id",requestId}}).dump();
+                        std::string errMsg = "unknown";
+                        if (pollResult.contains("error")) {
+                            auto& e = pollResult["error"];
+                            if (e.is_object())
+                                errMsg = e.value("message", e.value("code", "unknown"));
+                            else if (e.is_string())
+                                errMsg = e.get<std::string>();
+                        }
+                        spdlog::warn("edit_video failed: {}", pollResp.body.substr(0, 500));
+                        return nlohmann::json({{"error","Video edit failed: "+errMsg},{"request_id",requestId}}).dump();
                     }
                 }
                 return R"({"error": "Video edit timed out after 5 minutes"})";
@@ -1547,11 +1577,16 @@ std::string ToolExecutor::execute(const std::string& name, const std::string& ar
                     auto pollResp = httpGet(pollUrl, apiKey);
                     if (!pollResp.ok()) continue;
                     auto pollResult = nlohmann::json::parse(pollResp.body);
-                    std::string status = pollResult.value("status", "");
+                    std::string status;
+                    if (pollResult.contains("status") && pollResult["status"].is_string())
+                        status = pollResult["status"].get<std::string>();
                     if (status == "done") {
                         std::string videoUrl;
-                        if (pollResult.contains("video") && pollResult["video"].contains("url"))
-                            videoUrl = pollResult["video"]["url"].get<std::string>();
+                        if (pollResult.contains("video") && pollResult["video"].is_object()) {
+                            auto& vid = pollResult["video"];
+                            if (vid.contains("url") && vid["url"].is_string())
+                                videoUrl = vid["url"].get<std::string>();
+                        }
                         if (!videoUrl.empty()) {
                             std::string mediaDir = (fs::path(workspace_) / "uploads" / "avacli-media").string();
                             fs::create_directories(mediaDir);
@@ -1562,7 +1597,16 @@ std::string ToolExecutor::execute(const std::string& name, const std::string& ar
                         }
                         return R"({"error": "Video extension completed but no download URL"})";
                     } else if (status == "failed" || status == "expired") {
-                        return nlohmann::json({{"error","Video extension failed: "+pollResult.value("error","unknown")},{"request_id",requestId}}).dump();
+                        std::string errMsg = "unknown";
+                        if (pollResult.contains("error")) {
+                            auto& e = pollResult["error"];
+                            if (e.is_object())
+                                errMsg = e.value("message", e.value("code", "unknown"));
+                            else if (e.is_string())
+                                errMsg = e.get<std::string>();
+                        }
+                        spdlog::warn("extend_video failed: {}", pollResp.body.substr(0, 500));
+                        return nlohmann::json({{"error","Video extension failed: "+errMsg},{"request_id",requestId}}).dump();
                     }
                 }
                 return R"({"error": "Video extension timed out after 5 minutes"})";

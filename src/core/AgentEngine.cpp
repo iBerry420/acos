@@ -124,7 +124,13 @@ std::string formatToolResultForDisplay(const std::string& toolName, const std::s
         auto j = nlohmann::json::parse(result);
         std::string out = "[Tool] " + toolName + ": ";
         if (j.contains("error")) {
-            out += "error: " + j["error"].get<std::string>();
+            auto& err = j["error"];
+            if (err.is_string())
+                out += "error: " + err.get<std::string>();
+            else if (err.is_object())
+                out += "error: " + err.value("message", err.dump());
+            else
+                out += "error: " + err.dump();
             return out;
         }
         if (toolName == "edit_file") {
