@@ -23,12 +23,7 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
 
     // ── Vultr VPS Management (admin only) ────────────────────────────
 
-    svr.Get("/api/vultr/plans", [ctx](const httplib::Request& req, httplib::Response& res) {
-        if (!isAdminRequest(req, ctx.masterKeyMgr)) {
-            res.status = 403;
-            res.set_content(R"({"error":"admin access required"})", "application/json");
-            return;
-        }
+    svr.Get("/api/vultr/plans", [ctx](const httplib::Request&, httplib::Response& res) {
         std::string key = getVultrApiKey();
         if (key.empty()) {
             res.status = 400;
@@ -40,12 +35,7 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
         res.set_content(plans.dump(), "application/json");
     });
 
-    svr.Get("/api/vultr/regions", [ctx](const httplib::Request& req, httplib::Response& res) {
-        if (!isAdminRequest(req, ctx.masterKeyMgr)) {
-            res.status = 403;
-            res.set_content(R"({"error":"admin access required"})", "application/json");
-            return;
-        }
+    svr.Get("/api/vultr/regions", [ctx](const httplib::Request&, httplib::Response& res) {
         std::string key = getVultrApiKey();
         if (key.empty()) {
             res.status = 400;
@@ -57,12 +47,7 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
         res.set_content(regions.dump(), "application/json");
     });
 
-    svr.Get("/api/vultr/account", [ctx](const httplib::Request& req, httplib::Response& res) {
-        if (!isAdminRequest(req, ctx.masterKeyMgr)) {
-            res.status = 403;
-            res.set_content(R"({"error":"admin access required"})", "application/json");
-            return;
-        }
+    svr.Get("/api/vultr/account", [ctx](const httplib::Request&, httplib::Response& res) {
         std::string key = getVultrApiKey();
         if (key.empty()) {
             res.status = 400;
@@ -77,12 +62,7 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
         res.set_content(out.dump(), "application/json");
     });
 
-    svr.Get("/api/vultr/instances", [ctx](const httplib::Request& req, httplib::Response& res) {
-        if (!isAdminRequest(req, ctx.masterKeyMgr)) {
-            res.status = 403;
-            res.set_content(R"({"error":"admin access required"})", "application/json");
-            return;
-        }
+    svr.Get("/api/vultr/instances", [ctx](const httplib::Request&, httplib::Response& res) {
         std::string key = getVultrApiKey();
         if (key.empty()) {
             res.status = 400;
@@ -95,11 +75,6 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
     });
 
     svr.Get(R"(/api/vultr/instances/([^/]+))", [ctx](const httplib::Request& req, httplib::Response& res) {
-        if (!isAdminRequest(req, ctx.masterKeyMgr)) {
-            res.status = 403;
-            res.set_content(R"({"error":"admin access required"})", "application/json");
-            return;
-        }
         std::string key = getVultrApiKey();
         if (key.empty()) {
             res.status = 400;
@@ -176,12 +151,7 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
         }
     });
 
-    svr.Get("/api/vultr/os", [ctx](const httplib::Request& req, httplib::Response& res) {
-        if (!isAdminRequest(req, ctx.masterKeyMgr)) {
-            res.status = 403;
-            res.set_content(R"({"error":"admin access required"})", "application/json");
-            return;
-        }
+    svr.Get("/api/vultr/os", [ctx](const httplib::Request&, httplib::Response& res) {
         std::string key = getVultrApiKey();
         if (key.empty()) {
             res.status = 400;
