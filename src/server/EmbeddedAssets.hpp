@@ -152,7 +152,7 @@ body{background:var(--bg-body);color:var(--text-primary);font-family:var(--font)
 .asset-card-thumb{width:100%;aspect-ratio:1;overflow:hidden;background:#0a0a14}
 .asset-card-thumb img,.asset-card-thumb video{width:100%;height:100%;object-fit:cover;display:block}
 .asset-card-info{padding:.5rem;font-size:.6875rem;color:var(--text-secondary)}
-.asset-card-info .asset-card-name{color:var(--text-primary);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.asset-card-info .asset-card-name{color:var(--text-primary);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis})html" R"html(
 .asset-card-info .asset-card-meta{display:flex;gap:.5rem;margin-top:.25rem;color:var(--text-muted)}
 .asset-card-node{position:absolute;top:.375rem;left:.375rem;font-size:.55rem;background:rgba(0,0,0,.7);color:#ccc;padding:1px 4px;border-radius:3px}
 .asset-card-type{position:absolute;top:.375rem;right:.375rem;font-size:.55rem;background:rgba(124,58,237,.7);color:#fff;padding:1px 4px;border-radius:3px;text-transform:uppercase}
@@ -266,7 +266,7 @@ body{background:var(--bg-body);color:var(--text-primary);font-family:var(--font)
 .streaming-dot{width:6px;height:6px;border-radius:50%;background:var(--accent-light);animation:pulse 1.2s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .blink-cursor::after{content:'';display:inline-block;width:2px;height:1em;background:var(--accent-pale);margin-left:2px;animation:blink 1s step-end infinite;vertical-align:text-bottom}
-@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}})html" R"html(
 
 /* ── Files ───────────────────────────────────────────── */
 .files-wrap{display:flex;flex:1;overflow:hidden}
@@ -384,7 +384,7 @@ body{background:var(--bg-body);color:var(--text-primary);font-family:var(--font)
 .config-option{display:flex;align-items:flex-start;gap:.75rem;padding:.75rem;border:1px solid var(--border);border-radius:var(--radius-sm);cursor:pointer;margin-bottom:.5rem;transition:all .15s}
 .config-option:hover{border-color:var(--border-accent)}
 .config-option.selected{border-color:var(--accent);background:rgba(124,58,237,0.08)}
-.config-radio{width:16px;height:16px;border-radius:50%;border:2px solid var(--border);flex-shrink:0;margin-top:2px;position:relative;transition:border-color .15s}
+.config-radio{width:16px;height:16px;border-radius:50%;border:2px solid var(--border);flex-shrink:0;margin-top:2px;position:relative;transition:border-color .15s})html" R"html(
 .config-option.selected .config-radio{border-color:var(--accent)}
 .config-option.selected .config-radio::after{content:'';position:absolute;top:2px;left:2px;right:2px;bottom:2px;border-radius:50%;background:var(--accent)}
 .config-title{font-weight:600;font-size:.875rem;color:var(--text-primary)}
@@ -529,7 +529,7 @@ body{background:var(--bg-body);color:var(--text-primary);font-family:var(--font)
 .usage-table{font-size:.75rem}
 .usage-table th,.usage-table td{padding:.25rem .375rem}
 .plan-grid{grid-template-columns:1fr}
-.region-grid{grid-template-columns:1fr 1fr}
+.region-grid{grid-template-columns:1fr 1fr})html" R"html(
 .deploy-modal{max-width:100%;margin:.5rem;max-height:95dvh}
 .deploy-modal-body{padding:1rem}
 .config-option{padding:.625rem}
@@ -669,7 +669,7 @@ logout:'<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 
 edit:'<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>',
 save:'<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/>',
 brain:'<path d="M12 2a7 7 0 0 0-7 7c0 3.25 2.76 6.43 5 8.37V20h4v-2.63c2.24-1.94 5-5.12 5-8.37a7 7 0 0 0-7-7z"/><path d="M10 20v2m4-2v2"/>',
-wrench:'<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+wrench:'<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',)html" R"html(
 dot:'<circle cx="12" cy="12" r="5" fill="currentColor" stroke="none"/>',
 clock:'<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
 plus:'<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
@@ -864,7 +864,7 @@ html+='<div class="mermaid-block"><div class="mermaid-head"><span>mermaid</span>
 }else{var cid='cb'+Math.random().toString(36).slice(2,8);
 html+='<div class="codeblock"><div class="cb-head"><span>'+e(codeLang||'code')+'</span><button onclick="copyCode(\''+cid+'\')">'+ic('copy',12)+' Copy</button></div><pre id="'+cid+'"><code>'+codeLines.join('\n')+'</code></pre></div>';}
 inCode=false;codeLines=[];codeLang='';
-}else{closeList();closeTable();inCode=true;codeLang=line.slice(3).trim();}
+}else{closeList();closeTable();inCode=true;codeLang=line.slice(3).trim();})html" R"html(
 continue;}
 if(inCode){codeLines.push(e(line));continue;}
 if(line.indexOf('|')!==-1&&line.trim().startsWith('|')){
@@ -1060,7 +1060,7 @@ h+='<label>Secret Value</label><input id="vaultValue" type="password" placeholde
 h+='<div style="margin-top:.75rem"><button class="toolbar-btn active" onclick="vaultStore()">'+ic('lock',12)+' Encrypt & Store</button></div>';
 h+='</div>';
 if(!S.vaultEntries||!S.vaultEntries.length){
-h+='<div style="color:var(--text-muted);text-align:center;padding:1rem">Vault is empty. Add API keys above or ask the AI to store them during a chat.</div>';
+h+='<div style="color:var(--text-muted);text-align:center;padding:1rem">Vault is empty. Add API keys above or ask the AI to store them during a chat.</div>';)html" R"html(
 }else{
 for(var i=0;i<S.vaultEntries.length;i++){
 var e=S.vaultEntries[i];
@@ -1286,7 +1286,7 @@ if(!S.assetsLoaded){fetchAssets();return '<div class="assets-empty"><div class="
 var filtered=S.assets.slice();
 if(S.assetsFilter!=='all')filtered=filtered.filter(function(a){return a.type===S.assetsFilter;});
 
-if(S.assetsSort==='date')filtered.sort(function(a,b){return (b.created_at||0)-(a.created_at||0);});
+if(S.assetsSort==='date')filtered.sort(function(a,b){return (b.created_at||0)-(a.created_at||0);});)html" R"html(
 else if(S.assetsSort==='name')filtered.sort(function(a,b){return (a.filename||'').localeCompare(b.filename||'');});
 else if(S.assetsSort==='size')filtered.sort(function(a,b){return (b.size||0)-(a.size||0);});
 
@@ -1454,7 +1454,7 @@ var thumb='';
 if(asset.type==='image')thumb='<div style="text-align:center;margin-bottom:1rem"><img src="'+esc(asset.url)+'" style="max-width:100%;max-height:300px;border-radius:var(--radius-sm);object-fit:contain"></div>';
 else if(asset.type==='video')thumb='<div style="text-align:center;margin-bottom:1rem"><video src="'+esc(asset.url)+'" controls style="max-width:100%;max-height:300px;border-radius:var(--radius-sm)"></video></div>';
 var modalHtml='<div class="ava-modal-backdrop" onclick="if(event.target===this)closeAnalysisModal()" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:1rem">'+
-'<div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-lg);max-width:600px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden">'+
+'<div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:var(--radius-lg);max-width:600px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden">'+)html" R"html(
 '<div style="display:flex;align-items:center;justify-content:space-between;padding:1rem 1.25rem;border-bottom:1px solid var(--border)">'+
 '<h3 style="margin:0;font-size:1rem;color:var(--accent-pale)">'+ic('brain',16)+' AI Analysis</h3>'+
 '<button onclick="closeAnalysisModal()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;padding:4px">'+ic('xic',18)+'</button></div>'+
@@ -1694,7 +1694,7 @@ streamInfo+
 '<div class="chat-input" style="position:relative">'+
 '<div id="mentionPopup" class="mention-popup"></div>'+
 '<div class="chat-input-row">'+
-'<button class="upload-btn" onclick="triggerUpload()" title="Attach file">'+ic('upload',16)+'</button>'+
+'<button class="upload-btn" onclick="triggerUpload()" title="Attach file">'+ic('upload',16)+'</button>'+)html" R"html(
 '<input type="file" id="fileUpload" style="display:none" onchange="handleUpload(this)">'+
 '<textarea id="chatInput" rows="1" placeholder="Type a message... (use @ to mention a node)" onkeydown="chatKey(event)" oninput="autoGrow(this)"></textarea>'+
 (S.streaming?
@@ -1894,7 +1894,7 @@ reader.onload=function(e){
 preview.innerHTML='<div class="upload-row" style="padding:0 1.5rem"><img src="'+e.target.result+'" class="upload-preview"><button class="upload-remove" onclick="removeUpload()">'+ic('xic',12)+' Remove</button></div>';
 };reader.readAsDataURL(file);
 }else if(file.type.startsWith('video/')){
-preview.innerHTML='<div class="upload-row" style="padding:0 1.5rem"><span style="font-size:.8125rem;color:var(--text-secondary)">'+ic('video',14)+' '+esc(file.name)+' ('+Math.round(file.size/1024)+'KB)</span><button class="upload-remove" onclick="removeUpload()">'+ic('xic',12)+' Remove</button></div>';
+preview.innerHTML='<div class="upload-row" style="padding:0 1.5rem"><span style="font-size:.8125rem;color:var(--text-secondary)">'+ic('video',14)+' '+esc(file.name)+' ('+Math.round(file.size/1024)+'KB)</span><button class="upload-remove" onclick="removeUpload()">'+ic('xic',12)+' Remove</button></div>';)html" R"html(
 }
 };
 window.removeUpload=function(){
@@ -2138,7 +2138,7 @@ var lpt=aMsg.parts.length?aMsg.parts[aMsg.parts.length-1]:null;
 if(!lpt||lpt.type!=='thinking'){aMsg.parts.push({type:'thinking',text:d.content||'',done:false});}
 else{lpt.text+=(d.content||'');}
 break;
-case 'thinking_done':
+case 'thinking_done':)html" R"html(
 aMsg.thinkingDone=true;
 for(var ti=aMsg.parts.length-1;ti>=0;ti--){if(aMsg.parts[ti].type==='thinking'){aMsg.parts[ti].done=true;break;}}
 break;
@@ -2396,7 +2396,7 @@ if(rafPending)return;rafPending=true;
 requestAnimationFrame(function(){
 rafPending=false;
 var idx=S.messages.length-1;
-var el=document.getElementById('msg'+idx);
+var el=document.getElementById('msg'+idx);)html" R"html(
 if(el){var bubble=el.querySelector('.msg-bubble');if(bubble){
 var body='';
 if(aMsg.parts&&aMsg.parts.length){
@@ -2673,7 +2673,7 @@ if(list)list.innerHTML='<div style="padding:.75rem;text-align:center"><div class
 loadChatNodes();
 };
 
-window.onNodeClick=function(id){
+window.onNodeClick=function(id){)html" R"html(
 if(S.activeNodeId===id){S.activeNodeId=null;}
 else{S.activeNodeId=id;}
 var items=document.querySelectorAll('.node-item[data-node-id]');
@@ -2929,7 +2929,7 @@ return '<div class="ide-header" style="display:flex;align-items:center;justify-c
 '<button onclick="ideSave()">'+ic('save',14)+' Save</button>'+
 '</div></div>'+
 '<div style="display:flex;flex:1;overflow:auto" id="ideScrollWrap">'+
-'<div class="ide-line-numbers" id="ideLineNums" style="padding:.5rem .25rem;text-align:right;color:var(--text-muted);font-family:var(--mono);font-size:.8125rem;line-height:1.65;user-select:none;background:var(--bg-surface);border-right:1px solid var(--border);min-width:40px;flex-shrink:0">'+lineNums+'</div>'+
+'<div class="ide-line-numbers" id="ideLineNums" style="padding:.5rem .25rem;text-align:right;color:var(--text-muted);font-family:var(--mono);font-size:.8125rem;line-height:1.65;user-select:none;background:var(--bg-surface);border-right:1px solid var(--border);min-width:40px;flex-shrink:0">'+lineNums+'</div>'+)html" R"html(
 '<textarea class="ide-editor" id="ideTextarea" spellcheck="false" oninput="onIdeInput()" onscroll="syncIdeScroll()">'+esc(tab.content||'')+'</textarea>'+
 '</div>';
 }
@@ -3193,7 +3193,7 @@ function loadUsageData(){
 var param=usageRangeParam(S.usageRange||'month');
 Promise.all([
 api('/api/usage/history?'+param,{silent:true}).catch(function(){return [];}),
-api('/api/tokens/usage',{silent:true}).catch(function(){return {};})
+api('/api/tokens/usage',{silent:true}).catch(function(){return {};}))html" R"html(
 ]).then(function(res){
 S.usageData={
 history:Array.isArray(res[0])?res[0]:[],
@@ -3406,7 +3406,7 @@ statsHtml+
 }
 function loadLogs(){api('/api/logs?limit=500',{silent:true}).then(function(d){logData=d||{entries:[],total:0};render();}).catch(function(){logData={entries:[],total:0};render();});}
 window.setLogFilter=function(f){logFilter=f;logExpandedIdx=null;render();};
-window.clearLogs=function(){api('/api/logs/clear',{method:'POST'}).then(function(){logData={entries:[],total:0};render();}).catch(function(){});};
+window.clearLogs=function(){api('/api/logs/clear',{method:'POST'}).then(function(){logData={entries:[],total:0};render();}).catch(function(){});};)html" R"html(
 window.toggleLogDetail=function(idx){logExpandedIdx=(logExpandedIdx===idx)?null:idx;render();};
 window.exportLogs=function(){
 if(!logData||!logData.entries)return;
@@ -3545,7 +3545,7 @@ return '<div style="margin-top:.75rem;padding-top:.75rem;border-top:1px solid va
 }
 if(m.type==='video_gen'){
 return '<div style="margin-top:.75rem;padding-top:.75rem;border-top:1px solid var(--border)"><div style="font-size:.8125rem;color:var(--accent-pale);margin-bottom:.5rem;font-weight:600">'+ic('video',14)+' Video Generation Settings</div>'+
-'<div class="set-row"><span class="set-label">Duration</span><select class="set-input" onchange="updateMediaSetting(\'duration\',this.value)"><option value="5"'+((ms.duration||'5')==='5'?' selected':'')+'>5 seconds</option><option value="10"'+(ms.duration==='10'?' selected':'')+'>10 seconds</option><option value="15"'+(ms.duration==='15'?' selected':'')+'>15 seconds</option></select></div>'+
+'<div class="set-row"><span class="set-label">Duration</span><select class="set-input" onchange="updateMediaSetting(\'duration\',this.value)"><option value="5"'+((ms.duration||'5')==='5'?' selected':'')+'>5 seconds</option><option value="10"'+(ms.duration==='10'?' selected':'')+'>10 seconds</option><option value="15"'+(ms.duration==='15'?' selected':'')+'>15 seconds</option></select></div>'+)html" R"html(
 '<div class="set-row"><span class="set-label">Aspect Ratio</span><select class="set-input" onchange="updateMediaSetting(\'ratio\',this.value)"><option value="16:9"'+((ms.ratio||'16:9')==='16:9'?' selected':'')+'>16:9 (Landscape)</option><option value="9:16"'+(ms.ratio==='9:16'?' selected':'')+'>9:16 (Portrait)</option><option value="1:1"'+(ms.ratio==='1:1'?' selected':'')+'>1:1 (Square)</option></select></div>'+
 '<div class="set-row"><span class="set-label">Resolution</span><select class="set-input" onchange="updateMediaSetting(\'resolution\',this.value)"><option value="480p"'+(ms.resolution==='480p'?' selected':'')+'>480p</option><option value="720p"'+((ms.resolution||'720p')==='720p'||ms.resolution==='720p'?' selected':'')+'>720p</option></select></div></div>';
 }
@@ -3747,7 +3747,7 @@ function renderArticleView(){
 var a=kbState.viewingArticle;
 if(!a){
 api('/api/articles/'+encodeURIComponent(kbState.viewingId)).then(function(d){
-kbState.viewingArticle=d;render();
+kbState.viewingArticle=d;render();)html" R"html(
 }).catch(function(){toast('Failed to load article','error');kbState.viewingId=null;render();});
 return '<div class="usage-wrap" style="display:flex;justify-content:center;padding:3rem"><div class="spinner"></div></div>';
 }
@@ -3972,7 +3972,7 @@ if(svcState.viewingLogs){
 var logEntries='';
 if(!svcState.logs){logEntries='<div style="text-align:center;padding:1rem"><div class="spinner"></div></div>';}
 else if(!svcState.logs.length){logEntries='<div style="text-align:center;padding:1rem;color:var(--text-muted);font-size:.8125rem">No logs yet</div>';}
-else{
+else{)html" R"html(
 for(var li=0;li<svcState.logs.length;li++){
 var l=svcState.logs[li];
 var lc={info:'#4ade80',warn:'#fbbf24',error:'#f87171',debug:'rgba(255,255,255,0.3)'}[l.level]||'var(--text-muted)';
@@ -4159,7 +4159,7 @@ html+='<div class="server-card">'+
 '<div class="server-card-header"><span class="server-card-name">'+esc(s.label||s.hostname||'Instance')+'</span>'+
 '<div class="server-card-status"><span class="status-dot" style="background:'+stColor+'"></span> '+esc(s.status||'unknown')+'</div></div>'+
 '<div class="server-card-details">'+
-'<div>IP: <span style="font-family:var(--mono)">'+esc(ipDisplay)+'</span></div>'+
+'<div>IP: <span style="font-family:var(--mono)">'+esc(ipDisplay)+'</span></div>'+)html" R"html(
 '<div>Region: '+esc(s.region||'--')+'</div>'+
 '<div>Plan: '+esc(s.plan||'--')+'</div>'+
 '<div>OS: '+esc(s.os||'--')+'</div>'+
@@ -4352,7 +4352,7 @@ root.innerHTML=
 '<div style="display:flex;flex-direction:column;gap:.75rem">'+
 '<div><label style="font-size:.75rem;color:var(--text-muted);display:block;margin-bottom:.25rem">Label</label><input class="deploy-input" id="nodeLabel" type="text" placeholder="my-server"></div>'+
 '<div><label style="font-size:.75rem;color:var(--text-muted);display:block;margin-bottom:.25rem">Host *</label><input class="deploy-input" id="nodeIp" type="text" placeholder="192.168.1.1 or node.example.com"></div>'+
-'<div><label style="font-size:.75rem;color:var(--text-muted);display:block;margin-bottom:.25rem">Port (default: 8080)</label><input class="deploy-input" id="nodePort" type="text" placeholder="8080" value="8080"></div>'+
+'<div><label style="font-size:.75rem;color:var(--text-muted);display:block;margin-bottom:.25rem">Port (default: 8080)</label><input class="deploy-input" id="nodePort" type="text" placeholder="8080" value="8080"></div>'+)html" R"html(
 '</div></div>'+
 '<div class="deploy-section"><div class="deploy-section-title">Authentication (optional)</div>'+
 '<div style="display:flex;flex-direction:column;gap:.75rem">'+
@@ -4576,7 +4576,7 @@ var changed=false;
 if(d.model&&d.model!==S.model){
 S.model=d.model;
 changed=true;
-var sel=document.getElementById('modelSelect');
+var sel=document.getElementById('modelSelect');)html" R"html(
 if(sel&&sel.value!==S.model)sel.value=S.model;
 var ssel=document.getElementById('settingsModel');
 if(ssel&&ssel.value!==S.model)ssel.value=S.model;

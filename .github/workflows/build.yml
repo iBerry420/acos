@@ -61,7 +61,7 @@ jobs:
           path: dist/avacli-*.tar.gz
 
   build-macos-x86_64:
-    runs-on: macos-15
+    runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
 
@@ -71,8 +71,7 @@ jobs:
       - name: Configure & build
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH="$(brew --prefix curl);$(brew --prefix sqlite3)" \
-            -DCMAKE_OSX_ARCHITECTURES=x86_64
+            -DCMAKE_PREFIX_PATH="$(brew --prefix curl);$(brew --prefix sqlite3)"
           cmake --build build
 
       - name: Package tarball
