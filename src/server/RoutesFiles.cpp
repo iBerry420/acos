@@ -7,6 +7,8 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include "utils/TimeUtils.hpp"
+
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -396,9 +398,7 @@ void registerFileRoutes(httplib::Server& svr, ServerContext ctx) {
                 std::error_code szEc;
                 auto sz = fs::file_size(entry.path(), szEc);
                 auto mtime = fs::last_write_time(entry.path());
-                auto sctp = std::chrono::time_point_cast<std::chrono::seconds>(
-                    std::chrono::clock_cast<std::chrono::system_clock>(mtime));
-                long long ts = sctp.time_since_epoch().count();
+                long long ts = avacli::fileTimeToUnixSeconds(mtime);
 
                 std::string url = "/uploads/avacli-media/" + relName;
                 std::string thumbUrl = url;

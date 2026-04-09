@@ -8,6 +8,8 @@
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 
+#include "utils/TimeUtils.hpp"
+
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -202,9 +204,7 @@ void registerDataRoutes(httplib::Server& svr, ServerContext ctx) {
                         std::error_code timeEc;
                         auto ftime = fs::last_write_time(sessionFile, timeEc);
                         if (!timeEc) {
-                            auto sctp = std::chrono::time_point_cast<std::chrono::seconds>(
-                                std::chrono::clock_cast<std::chrono::system_clock>(ftime));
-                            item["modified"] = sctp.time_since_epoch().count();
+                            item["modified"] = avacli::fileTimeToUnixSeconds(ftime);
                         } else {
                             item["modified"] = 0;
                         }

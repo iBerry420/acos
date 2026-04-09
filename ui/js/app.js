@@ -831,7 +831,7 @@ var el=document.getElementById('analysisModalRoot');if(el)el.remove();
 };
 
 /* ── Router ───────────────────────────────────────────── */
-function getRoute(){return location.hash.slice(1)||'/';}
+function getRoute(){return location.hash.slice(1)||'/chat';}
 function navigate(h){if(h!==undefined)location.hash=h;S.route=getRoute();render();}
 window.addEventListener('hashchange',function(){S.route=getRoute();render();});
 
@@ -904,15 +904,13 @@ app.innerHTML=
 '<div id="sbOverlay" class="sb-overlay'+(S.sidebarOpen?' open':'')+'" onclick="closeSidebar()"></div>'+
 '<nav id="sidebar" class="sidebar'+(S.sidebarOpen?' open':'')+'">'+renderSidebar()+'</nav>'+
 '<main id="main" class="main">'+renderPage()+'</main>';
-if(S.route==='/'){setupDashboard();}
-else if(S.route==='/chat')setupChat();
+if(S.route==='/'||S.route==='/chat')setupChat();
 if(S.route==='/files')setupIdeAfterRender();
 if(S.route==='/servers')loadServers();
 }
 
 function renderSidebar(){
 var links=[
-{r:'/',ic:'home',l:'Home'},
 {r:'/chat',ic:'chat',l:'Chat'},
 {r:'/assets',ic:'image',l:'Assets'},
 {r:'/tools',ic:'wrench',l:'Tools'},
@@ -945,7 +943,7 @@ return '<div class="sb-head"><span class="sb-logo">Avacli</span><button class="s
 
 function renderPage(){
 switch(S.route){
-case '/':return renderDashboard();
+case '/':
 case '/chat':return renderChat();
 case '/assets':return renderAssets();
 case '/tools':return renderTools();

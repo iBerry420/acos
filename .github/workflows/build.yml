@@ -88,14 +88,29 @@ jobs:
 
   build-windows:
     runs-on: windows-latest
+    env:
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\vcpkg-cache
     steps:
       - uses: actions/checkout@v4
+
+      - name: Create vcpkg binary cache dir
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path "${{ github.workspace }}\vcpkg-cache"
 
       - name: Setup vcpkg
         shell: pwsh
         run: |
-          git clone https://github.com/microsoft/vcpkg.git --depth 1 "${{ github.workspace }}\vcpkg"
-          & "${{ github.workspace }}\vcpkg\bootstrap-vcpkg.bat"
+          git clone https://github.com/microsoft/vcpkg.git "${{ github.workspace }}\vcpkg"
+          cd "${{ github.workspace }}\vcpkg"
+          git checkout 2024.12.16
+          & .\bootstrap-vcpkg.bat
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}\vcpkg-cache
+          key: vcpkg-win-x64-${{ hashFiles('vcpkg.json') }}
+          restore-keys: vcpkg-win-x64-
 
       - name: Configure & build
         shell: pwsh
