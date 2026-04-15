@@ -1417,18 +1417,20 @@ try{mermaid.render('mmd'+Math.random().toString(36).slice(2,8),src).then(functio
 el.innerHTML=r.svg;
 var svg=el.querySelector('svg');
 if(svg){
-svg.style.overflow='visible';
-svg.style.maxWidth='none';
 svg.removeAttribute('width');
+svg.removeAttribute('height');
+svg.style.overflow='visible';
 requestAnimationFrame(function(){
 var bb=svg.getBBox();
 if(bb&&bb.width>0){
 var pad=40;
-var vb=(bb.x-pad)+' '+(bb.y-pad)+' '+(bb.width+pad*2)+' '+(bb.height+pad*2);
-svg.setAttribute('viewBox',vb);
-svg.setAttribute('width',bb.width+pad*2);
-svg.setAttribute('height',bb.height+pad*2);
+var nw=bb.width+pad*2,nh=bb.height+pad*2;
+svg.setAttribute('viewBox',(bb.x-pad)+' '+(bb.y-pad)+' '+nw+' '+nh);
+svg.dataset.naturalWidth=nw;
+svg.dataset.naturalHeight=nh;
 }
+svg.removeAttribute('width');
+svg.removeAttribute('height');
 initPanZoom(el);
 });
 }
@@ -1441,6 +1443,9 @@ function initPanZoom(container){
 var svg=container.querySelector('svg');
 if(!svg||container.querySelector('.pz-controls'))return;
 var state={x:0,y:0,scale:1,dragging:false,startX:0,startY:0,lastDist:0};
+svg.style.position='absolute';
+svg.style.left='0';
+svg.style.top='0';
 svg.style.transformOrigin='0 0';
 svg.style.cursor='grab';
 svg.style.transition='none';
@@ -1525,10 +1530,12 @@ container._pzApply=applyTransform;
 
 requestAnimationFrame(function(){
 var cRect=container.getBoundingClientRect();
-var sW=parseFloat(svg.getAttribute('width'))||svg.scrollWidth||svg.getBoundingClientRect().width;
-var sH=parseFloat(svg.getAttribute('height'))||svg.scrollHeight||svg.getBoundingClientRect().height;
-if(!sW||!sH){var bb=svg.getBBox?svg.getBBox():{x:0,y:0,width:100,height:100};sW=bb.width+bb.x*2;sH=bb.height+bb.y*2;}
+var sW=parseFloat(svg.dataset.naturalWidth)||0;
+var sH=parseFloat(svg.dataset.naturalHeight)||0;
+if(!sW||!sH){try{var bb=svg.getBBox();sW=bb.width+80;sH=bb.height+80;}catch(e){sW=800;sH=600;}}
 state._origW=sW;state._origH=sH;
+svg.setAttribute('width',sW);
+svg.setAttribute('height',sH);
 if(sW>0&&sH>0&&cRect.width>0&&cRect.height>0){
 var fit=Math.min(cRect.width/sW,cRect.height/sH,1);
 state.scale=fit*0.92;
