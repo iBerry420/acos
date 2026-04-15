@@ -26,8 +26,10 @@ namespace fs = std::filesystem;
 struct HttpServer::Impl {
     httplib::Server svr;
     std::atomic<bool> chatCancelFlag{false};
+    std::atomic<bool> chatBusyFlag{false};
     std::atomic<size_t> sessionPromptTokens{0};
     std::atomic<size_t> sessionCompletionTokens{0};
+    AskUserState askUserState;
 };
 
 HttpServer::HttpServer(ServeConfig config)
@@ -139,9 +141,11 @@ void HttpServer::setupRoutes() {
     ctx.config = &config_;
     ctx.masterKeyMgr = &masterKeyMgr_;
     ctx.chatCancelFlag = &impl_->chatCancelFlag;
+    ctx.chatBusyFlag = &impl_->chatBusyFlag;
     ctx.sessionPromptTokens = &impl_->sessionPromptTokens;
     ctx.sessionCompletionTokens = &impl_->sessionCompletionTokens;
     ctx.actualPort = &actualPort_;
+    ctx.askUserState = &impl_->askUserState;
 
     // Register all route groups
     registerAuthRoutes(svr, ctx);
@@ -155,6 +159,7 @@ void HttpServer::setupRoutes() {
     registerKnowledgeRoutes(svr, ctx);
     registerAppRoutes(svr, ctx);
     registerServiceRoutes(svr, ctx);
+    registerSystemRoutes(svr, ctx);
 
     // App serving: /apps/:slug/* serves user-created app files from SQLite
     svr.Get(R"(/apps/([^/]+)/(.*))", [](const httplib::Request& req, httplib::Response& res) {

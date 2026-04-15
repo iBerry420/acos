@@ -65,7 +65,44 @@ std::string fileToDataUri(const std::string& filePath) {
 
 } // anonymous namespace
 
+static thread_local AskUserState* _threadAskUserState = nullptr;
+
 void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
+
+    svr.Post("/api/chat/ask_user", [ctx](const httplib::Request& req, httplib::Response& res) {
+        nlohmann::json body;
+        try { body = nlohmann::json::parse(req.body); } catch (...) {
+            res.status = 400;
+            res.set_content(R"({"error":"invalid JSON"})", "application/json");
+            return;
+        }
+        std::string answer = body.value("answer", "");
+        auto* state = ctx.askUserState;
+        if (!state) {
+            res.status = 400;
+            res.set_content(R"({"error":"no pending question"})", "application/json");
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lk(state->mu);
+            if (!state->pending) {
+                res.status = 400;
+                res.set_content(R"({"error":"no pending question"})", "application/json");
+                return;
+            }
+            state->response = answer;
+            state->responded = true;
+        }
+        state->cv.notify_all();
+        res.set_content(R"({"ok":true})", "application/json");
+    });
+
+    svr.Get("/api/chat/status", [ctx](const httplib::Request&, httplib::Response& res) {
+        nlohmann::json j;
+        j["busy"] = ctx.chatBusyFlag->load();
+        j["cancelled"] = ctx.chatCancelFlag->load();
+        res.set_content(j.dump(), "application/json");
+    });
 
     svr.Post("/api/chat/stop", [ctx](const httplib::Request&, httplib::Response& res) {
         ctx.chatCancelFlag->store(true);
@@ -117,6 +154,7 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
                              model.find("grok-imagine-video") != std::string::npos);
 
         ctx.chatCancelFlag->store(false);
+        ctx.chatBusyFlag->store(true);
         LogBuffer::instance().info("chat", "Chat request started", {{"model", model}});
 
         res.set_header("Cache-Control", "no-cache");
@@ -149,8 +187,9 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
         // Media model path (image/video generation)
         if (isMediaModel) {
             std::string workspace = ctx.config->workspace;
+            auto busyFlag = ctx.chatBusyFlag;
             std::thread mediaThread([eq, pushEvent, message, model, sessionName,
-                                     mediaSettings, contextMedia, apiKey, cancelFlag, workspace]() {
+                                     mediaSettings, contextMedia, apiKey, cancelFlag, busyFlag, workspace]() {
                 bool isVideo = (model.find("video") != std::string::npos);
                 std::string mediaType = isVideo ? "video" : "image";
 
@@ -262,6 +301,7 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
                 pushEvent({{"type", "done"}, {"success", success}, {"cancelled", false},
                            {"session", sessionName}, {"prompt_tokens", 0}, {"completion_tokens", 0}});
 
+                busyFlag->store(false);
                 std::lock_guard<std::mutex> lock(eq->mu);
                 eq->done = true;
                 eq->cv.notify_one();
@@ -288,9 +328,12 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
 
         // Normal chat model path
         std::string workspace = ctx.config->workspace;
+        auto busyFlag2 = ctx.chatBusyFlag;
+        auto askState = ctx.askUserState;
         std::thread agentThread([eq, pushEvent, message, model, sessionName, modeStr,
-                                 cancelFlag, promptCounter, completionCounter, useHistory, notes,
-                                 chatEndpointUrl, apiKey, workspace, contextMedia, maxTokensOverride]() {
+                                 cancelFlag, busyFlag2, promptCounter, completionCounter, useHistory, notes,
+                                 chatEndpointUrl, apiKey, workspace, contextMedia, maxTokensOverride, askState]() {
+          _threadAskUserState = askState;
           try {
             Mode mode = modeFromString(modeStr);
             ToolRegistry::registerAll();
@@ -306,6 +349,28 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
             auto toolExecutor = std::make_unique<ToolExecutor>(workspace, mode, nullptr);
             toolExecutor->setSessionId(sessionName);
             toolExecutor->setSearchModel(model);
+
+            toolExecutor->setAskUser([pushEvent, cancelFlag](const std::string& question) -> std::string {
+                pushEvent({{"type", "ask_user"}, {"question", question}});
+
+                auto* state = _threadAskUserState;
+                if (!state) return "{\"error\": \"ask_user not available\"}";
+
+                {
+                    std::lock_guard<std::mutex> lk(state->mu);
+                    state->pending = true;
+                    state->question = question;
+                    state->responded = false;
+                    state->response.clear();
+                }
+
+                std::unique_lock<std::mutex> lk(state->mu);
+                state->cv.wait(lk, [&] { return state->responded || cancelFlag->load(); });
+
+                state->pending = false;
+                if (cancelFlag->load()) return "User cancelled.";
+                return state->response;
+            });
 
             struct ThoughtState {
                 bool inThought = false;
@@ -387,6 +452,7 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
                 pushEvent({{"type", "done"}, {"success", false}, {"cancelled", true},
                            {"session", sessionName},
                            {"prompt_tokens", 0}, {"completion_tokens", 0}});
+                busyFlag2->store(false);
                 std::lock_guard<std::mutex> lock(eq->mu);
                 eq->done = true;
                 eq->cv.notify_one();
@@ -511,6 +577,7 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
                         {"prompt_tokens", tracker.promptTokens()},
                         {"completion_tokens", tracker.completionTokens()}});
 
+            busyFlag2->store(false);
             std::lock_guard<std::mutex> lock(eq->mu);
             eq->done = true;
             eq->cv.notify_one();
@@ -520,6 +587,7 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
             LogBuffer::instance().info("chat", "Chat completed");
             pushEvent({{"type", "done"}, {"success", false}, {"cancelled", false},
                         {"session", sessionName}, {"prompt_tokens", 0}, {"completion_tokens", 0}});
+            busyFlag2->store(false);
             std::lock_guard<std::mutex> lock(eq->mu);
             eq->done = true;
             eq->cv.notify_one();
@@ -529,6 +597,7 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
             LogBuffer::instance().info("chat", "Chat completed");
             pushEvent({{"type", "done"}, {"success", false}, {"cancelled", false},
                         {"session", sessionName}, {"prompt_tokens", 0}, {"completion_tokens", 0}});
+            busyFlag2->store(false);
             std::lock_guard<std::mutex> lock(eq->mu);
             eq->done = true;
             eq->cv.notify_one();

@@ -907,6 +907,7 @@ app.innerHTML=
 if(S.route==='/'||S.route==='/chat')setupChat();
 if(S.route==='/files')setupIdeAfterRender();
 if(S.route==='/servers')loadServers();
+if(S.route==='/system')setupSystemPage();
 }
 
 function renderSidebar(){
@@ -919,6 +920,7 @@ var links=[
 {r:'/apps',ic:'grid',l:'Apps'},
 {r:'/services',ic:'activity',l:'Services'},
 {r:'/usage',ic:'activity',l:'Usage'},
+{r:'/system',ic:'brain',l:'System'},
 {r:'/logs',ic:'log',l:'Logs'},
 {r:'/servers',ic:'server',l:'Servers'},
 {r:'/settings',ic:'gear',l:'Settings'}
@@ -952,6 +954,7 @@ case '/knowledge':return renderKnowledge();
 case '/apps':return renderApps();
 case '/services':return renderServices();
 case '/usage':return renderUsage();
+case '/system':return renderSystem();
 case '/logs':return renderLogs();
 case '/servers':return renderServers();
 case '/settings':return renderSettings();
@@ -1299,6 +1302,8 @@ var tcc=p.text?p.text.length:0;
 body+='<div class="think-block"><div class="think-head" onclick="toggleEl(this)">'+ic('brain',14)+' Thinking'+(p.done&&tcc?' ('+tcc+' chars)':p.done?'':' ...')+'</div><div class="think-body" style="display:none">'+esc(p.text||'')+'</div></div>';
 }else if(p.type==='tool'){
 var tl=m.tools[p.toolIdx];if(tl)body+=renderToolBlock(tl);
+}else if(p.type==='ask_user'){
+body+=renderAskUserBlock(m,idx,p.question);
 }else if(p.type==='content'){body+=md(p.text||'');}
 }
 }else{
@@ -1336,12 +1341,69 @@ var body=head.nextElementSibling;if(!body)return;
 body.style.display=body.style.display==='none'?'block':'none';
 };
 
+function renderAskUserBlock(m,idx,question){
+var answered=m.askUser&&m.askUser.answered;
+var h='<div class="ask-user-block">';
+h+='<div class="ask-user-header">'+ic('user',14)+' Agent is asking you a question</div>';
+h+='<div class="ask-user-question">'+esc(question)+'</div>';
+if(answered){
+h+='<div class="ask-user-answered">'+ic('check',12)+' Answered: '+esc(m.askUser.answer||'')+'</div>';
+}else{
+h+='<div class="ask-user-input-row"><input type="text" id="askUserInput'+idx+'" class="ask-user-input" placeholder="Type your answer..." onkeydown="if(event.key===\'Enter\'){event.preventDefault();submitAskUser('+idx+');}">';
+h+='<button class="ask-user-btn" onclick="submitAskUser('+idx+')">'+ic('send',14)+' Reply</button></div>';
+}
+h+='</div>';
+return h;
+}
+window.submitAskUser=function(idx){
+var inp=document.getElementById('askUserInput'+idx);
+if(!inp)return;
+var answer=inp.value.trim();
+if(!answer)return;
+inp.disabled=true;
+var btn=inp.parentElement.querySelector('.ask-user-btn');
+if(btn){btn.disabled=true;btn.innerHTML=ic('check',14)+' Sent';}
+api('/api/chat/ask_user',{method:'POST',body:{answer:answer}}).then(function(){
+var m=S.messages[idx];
+if(m&&m.askUser){m.askUser.answered=true;m.askUser.answer=answer;scheduleStreamUpdate(m);}
+}).catch(function(e){
+inp.disabled=false;
+if(btn){btn.disabled=false;btn.innerHTML=ic('send',14)+' Reply';}
+toast('Failed to send answer: '+e.message,'error');
+});
+};
+
 function setupChat(){
 var ta=document.getElementById('chatInput');
 if(ta){ta.focus();var draft=localStorage.getItem('ava_draft');if(draft){ta.value=draft;ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,150)+'px';}}
 scrollToBottom(true);setupMsgActions();renderMermaidBlocks();installChatResizeObserver();
 setupMentionPicker();
 if(!S.nodesLoaded)loadChatNodes();
+if(!window._wakeLockInstalled)initWakeLock();
+}
+
+/* Wake Lock — keeps screen on during streaming on mobile.
+   Installed once globally to avoid stacking wrappers/listeners. */
+var _wakeLock=null;
+function initWakeLock(){
+if(!('wakeLock' in navigator))return;
+window._wakeLockInstalled=true;
+function requestWakeLock(){
+if(_wakeLock)return;
+navigator.wakeLock.request('screen').then(function(lock){
+_wakeLock=lock;
+lock.addEventListener('release',function(){_wakeLock=null;});
+}).catch(function(){});
+}
+function releaseWakeLock(){
+if(_wakeLock){_wakeLock.release().catch(function(){});_wakeLock=null;}
+}
+document.addEventListener('visibilitychange',function(){
+if(document.visibilityState==='hidden')releaseWakeLock();
+else if(document.visibilityState==='visible'&&S.streaming)requestWakeLock();
+});
+window._wakeLockAcquire=requestWakeLock;
+window._wakeLockRelease=releaseWakeLock;
 }
 function renderMermaidBlocks(){
 if(typeof mermaid==='undefined')return;
@@ -1438,6 +1500,7 @@ function doSendChat(msg,extraContextMedia){
 var aMsg={role:'assistant',content:'',thinking:'',thinkingDone:false,tools:[],usage:null,media:null,mediaStatus:null,parts:[]};
 S.messages.push(aMsg);
 S.streaming=true;S.streamStart=Date.now();autoScroll=true;
+if(window._wakeLockAcquire)window._wakeLockAcquire();
 if(S.streamTimer)clearInterval(S.streamTimer);
 S.streamTimer=setInterval(function(){
 if(!S.streaming){clearInterval(S.streamTimer);S.streamTimer=null;return;}
@@ -1526,6 +1589,10 @@ if(!aMsg.media)aMsg.media=[];aMsg.media.push({url:tu,type:tt,inContext:true});
 S.selectedAssets.push({url:tu,type:tt,inContext:true,thumb_url:tu});S.assetsLoaded=false;}}
 }catch(e){}}
 break;
+case 'ask_user':
+aMsg.askUser={question:d.question||'',answered:false};
+aMsg.parts.push({type:'ask_user',question:d.question||''});
+break;
 case 'media_start':
 aMsg.mediaStatus={type:d.media_type||'image',status:'starting',prompt:d.prompt||''};break;
 case 'media_progress':
@@ -1555,7 +1622,7 @@ break;
 case 'session_init':
 if(d.session){S.session=d.session;localStorage.setItem('ava_last_session',d.session);}
 break;
-case 'done':S.streaming=false;chatAbort=null;if(S.streamTimer){clearInterval(S.streamTimer);S.streamTimer=null;}if(d.session){S.session=d.session;localStorage.setItem('ava_last_session',d.session);}
+case 'done':S.streaming=false;chatAbort=null;if(S.streamTimer){clearInterval(S.streamTimer);S.streamTimer=null;}if(window._wakeLockRelease)window._wakeLockRelease();if(d.session){S.session=d.session;localStorage.setItem('ava_last_session',d.session);}
 saveMessagesToLocal();
 if(!S.assetsLoaded)fetchAssets(function(){});
 var ab=document.getElementById('assetBar');if(ab)ab.innerHTML=renderAssetBar();
@@ -1574,7 +1641,12 @@ return reader.read().then(function(r){
 if(r.value)buf+=dec.decode(r.value,{stream:!r.done});
 if(r.done){
 flushSseBuffer(true);
-S.streaming=false;chatAbort=null;render();
+if(S.streaming){
+/* Stream closed without a done event — connection dropped while agent runs.
+   Trigger the same reconnection polling as the catch handler. */
+throw new Error('stream_disconnected');
+}
+chatAbort=null;render();
 return;
 }
 flushSseBuffer(false);
@@ -1583,8 +1655,36 @@ return pump();
 }
 return pump();
 }).catch(function(e){
-if(e.name!=='AbortError'){toast('Chat error: '+e.message,'error');if(!aMsg.content)aMsg.content='*Error: '+e.message+'*';}
-chatAbort=null;S.streaming=false;render();
+if(e.name==='AbortError'){chatAbort=null;S.streaming=false;if(window._wakeLockRelease)window._wakeLockRelease();render();return;}
+/* Stream broke unexpectedly — agent may still be running server-side.
+   Poll /api/chat/status until it's no longer busy, then reload the session. */
+toast('Connection lost — waiting for agent to finish...','warning');
+chatAbort=null;
+var pollDelay=2000,maxPoll=120,polls=0;
+function pollStatus(){
+polls++;
+if(polls>maxPoll){S.streaming=false;if(window._wakeLockRelease)window._wakeLockRelease();toast('Agent timed out after reconnection attempt','error');render();return;}
+var ph={};if(S.token)ph['Authorization']='Bearer '+S.token;
+fetch('/api/chat/status',{headers:ph}).then(function(r){return r.json();}).then(function(d){
+if(!d.busy){
+S.streaming=false;if(window._wakeLockRelease)window._wakeLockRelease();
+if(S.streamTimer){clearInterval(S.streamTimer);S.streamTimer=null;}
+toast('Agent finished — reloading session','success');
+api('/api/sessions/'+encodeURIComponent(S.session)).then(function(data){
+if(!data)return;
+S.messages=restoreMessagesFromApi(data);saveMessagesToLocal();autoScroll=true;render();
+setTimeout(function(){scrollToBottom(true);},50);
+}).catch(function(){render();});
+return;
+}
+var si=document.querySelector('.streaming-indicator');
+if(si)si.innerHTML='<div class="streaming-dot" style="background:var(--warning)"></div> Reconnecting &middot; poll '+polls;
+setTimeout(pollStatus,Math.min(pollDelay*Math.pow(1.3,polls-1),15000));
+}).catch(function(){
+setTimeout(pollStatus,Math.min(pollDelay*Math.pow(1.3,polls-1),15000));
+});
+}
+pollStatus();
 });
 }
 window.sendMsg=function(){
@@ -1763,6 +1863,8 @@ body+='<div class="think-block"><div class="think-head" onclick="toggleEl(this)"
 }else if(p.type==='tool'){
 var tl=aMsg.tools[p.toolIdx];
 if(tl)body+=renderToolBlock(tl);
+}else if(p.type==='ask_user'){
+body+=renderAskUserBlock(aMsg,idx,p.question);
 }else if(p.type==='content'){
 body+=md(p.text||'');
 }
@@ -2788,6 +2890,249 @@ if(logAutoScroll&&wasAtBottom){var c2=document.getElementById('logContainer');if
 }).catch(function(){});
 },3000);
 }
+
+/* ── System Page ──────────────────────────────────────── */
+var sysState={prompt:'',blueprints:[],activeId:null,editing:false,nodes:[],edges:[],bpName:'',bpDesc:'',loaded:false,mermaidSrc:'',promptDirty:false,flowDirty:false};
+
+function loadSystemData(){
+api('/api/system/prompt',{silent:true}).then(function(d){
+sysState.prompt=d.prompt||'';sysState.loaded=true;renderSystemInner();
+}).catch(function(){sysState.loaded=true;renderSystemInner();});
+api('/api/system/blueprints',{silent:true}).then(function(arr){
+sysState.blueprints=Array.isArray(arr)?arr:[];renderSystemInner();
+}).catch(function(){});
+}
+
+function renderSystem(){
+if(!sysState.loaded){loadSystemData();return '<div class="sys-wrap" id="sysWrap"><div style="display:flex;justify-content:center;padding:3rem"><div class="spinner"></div></div></div>';}
+return '<div class="sys-wrap" id="sysWrap">'+renderSystemInnerHtml()+'</div>';
+}
+
+function renderSystemInnerHtml(){
+var h='<div class="sys-header"><h2>'+ic('brain',20)+' System Prompt & Agent Blueprints</h2>';
+h+='<p class="sys-sub">Design and manage how the agent behaves. Build flowcharts, save blueprints, minimize tokens with maximum context.</p></div>';
+
+h+='<div class="sys-grid">';
+
+// Left: Prompt editor
+h+='<div class="sys-panel sys-prompt-panel">';
+h+='<div class="sys-panel-head"><span>'+ic('edit',14)+' Active System Prompt</span>';
+h+='<div class="sys-panel-actions"><button class="sys-btn sys-btn-sm" onclick="sysGenMermaid()">'+ic('activity',12)+' Visualize</button>';
+h+='<button class="sys-btn sys-btn-primary sys-btn-sm" onclick="sysSavePrompt()">'+ic('save',12)+' Save</button></div></div>';
+h+='<textarea id="sysPromptEditor" class="sys-textarea" oninput="sysState.promptDirty=true" spellcheck="false">'+esc(sysState.prompt)+'</textarea>';
+h+='<div class="sys-prompt-meta"><span id="sysTokenEst">~'+Math.round((sysState.prompt||'').length/4)+' tokens</span>';
+h+='<span id="sysCharCount">'+((sysState.prompt||'').length)+' chars</span></div>';
+h+='</div>';
+
+// Right: Mermaid preview
+h+='<div class="sys-panel sys-flow-panel">';
+h+='<div class="sys-panel-head"><span>'+ic('activity',14)+' Agent Flow</span></div>';
+h+='<div class="sys-mermaid-wrap" id="sysMermaidWrap">';
+if(sysState.mermaidSrc){
+h+='<div class="mermaid-render" data-mermaid-src="'+esc(sysState.mermaidSrc)+'"></div>';
+}else{
+h+='<div class="sys-flow-empty">'+ic('activity',32)+'<p>Click "Visualize" to generate a flowchart from the system prompt</p></div>';
+}
+h+='</div>';
+h+='</div>';
+
+h+='</div>'; // /sys-grid
+
+// Flow builder
+h+='<div class="sys-section">';
+h+='<div class="sys-section-head"><h3>'+ic('zap',16)+' Flow Builder</h3>';
+h+='<button class="sys-btn sys-btn-sm" onclick="sysAddNode()">'+ic('plus',12)+' Add Node</button></div>';
+h+='<div class="sys-flow-builder" id="sysFlowBuilder">';
+h+=renderFlowBuilder();
+h+='</div></div>';
+
+// Blueprints
+h+='<div class="sys-section">';
+h+='<div class="sys-section-head"><h3>'+ic('grid',16)+' Saved Blueprints</h3>';
+h+='<button class="sys-btn sys-btn-primary sys-btn-sm" onclick="sysSaveBlueprint()">'+ic('save',12)+' Save Current as Blueprint</button></div>';
+h+='<div class="sys-blueprints" id="sysBlueprintList">';
+if(!sysState.blueprints.length){
+h+='<div class="sys-bp-empty">No blueprints yet. Save your current prompt and flow as a blueprint to get started.</div>';
+}else{
+for(var i=0;i<sysState.blueprints.length;i++){
+var bp=sysState.blueprints[i];
+h+='<div class="sys-bp-card" data-bp="'+esc(bp.id)+'">';
+h+='<div class="sys-bp-card-head"><strong>'+esc(bp.name||'Untitled')+'</strong>';
+h+=(bp.is_default?'<span class="sys-bp-badge">Default</span>':'');
+h+='</div>';
+h+='<div class="sys-bp-card-desc">'+esc(bp.description||'No description')+'</div>';
+h+='<div class="sys-bp-card-meta">'+((bp.prompt||'').length?'~'+Math.round(bp.prompt.length/4)+' tokens':'Empty')+' &middot; ';
+h+=(bp.nodes&&bp.nodes.length?bp.nodes.length+' nodes':'No flow')+'</div>';
+h+='<div class="sys-bp-card-actions">';
+h+='<button class="sys-btn sys-btn-sm" data-bp-action="load" data-bp-id="'+esc(bp.id)+'" onclick="sysLoadBlueprint(this.dataset.bpId)">'+ic('download',12)+' Load</button>';
+h+='<button class="sys-btn sys-btn-primary sys-btn-sm" data-bp-action="deploy" data-bp-id="'+esc(bp.id)+'" onclick="sysDeployBlueprint(this.dataset.bpId)">'+ic('zap',12)+' Deploy</button>';
+h+='<button class="sys-btn sys-btn-danger sys-btn-sm" data-bp-action="delete" data-bp-id="'+esc(bp.id)+'" onclick="sysDeleteBlueprint(this.dataset.bpId)">'+ic('trash',12)+'</button>';
+h+='</div></div>';
+}}
+h+='</div></div>';
+
+return h;
+}
+
+function renderFlowBuilder(){
+var h='<div class="sys-fb-nodes">';
+var nodes=sysState.nodes||[];
+var nodeTypes=[{v:'process',l:'Process'},{v:'tool',l:'Tool'},{v:'decision',l:'Decision'},{v:'io',l:'I/O'}];
+if(!nodes.length){
+h+='<div class="sys-fb-hint">Add nodes to build a visual agent flow. Nodes become steps in the Mermaid diagram.</div>';
+}
+for(var i=0;i<nodes.length;i++){
+var n=nodes[i];
+h+='<div class="sys-fb-node" data-nidx="'+i+'">';
+h+='<input type="text" class="sys-fb-input" value="'+esc(n.label||'')+'" placeholder="Label" onchange="sysUpdateNode('+i+',\'label\',this.value)">';
+h+='<select class="sys-fb-select" onchange="sysUpdateNode('+i+',\'type\',this.value)">';
+for(var ti=0;ti<nodeTypes.length;ti++){h+='<option value="'+nodeTypes[ti].v+'"'+(n.type===nodeTypes[ti].v?' selected':'')+'>'+nodeTypes[ti].l+'</option>';}
+h+='</select>';
+h+='<button class="sys-fb-del" onclick="sysRemoveNode('+i+')">'+ic('xic',12)+'</button>';
+h+='</div>';
+}
+h+='</div>';
+
+h+='<div class="sys-fb-edges">';
+h+='<div class="sys-fb-edge-head"><span>Connections</span><button class="sys-btn sys-btn-sm" onclick="sysAddEdge()">'+ic('plus',12)+' Add</button></div>';
+var edges=sysState.edges||[];
+for(var i=0;i<edges.length;i++){
+var e=edges[i];
+h+='<div class="sys-fb-edge">';
+h+='<select class="sys-fb-select" onchange="sysUpdateEdge('+i+',\'from\',this.value)">';
+h+='<option value="">From...</option>';
+for(var ni=0;ni<nodes.length;ni++){h+='<option value="'+esc(nodes[ni].id)+'"'+(e.from===nodes[ni].id?' selected':'')+'>'+esc(nodes[ni].label||nodes[ni].id)+'</option>';}
+h+='</select>';
+h+='<span class="sys-fb-arrow">'+ic('chevR',14)+'</span>';
+h+='<select class="sys-fb-select" onchange="sysUpdateEdge('+i+',\'to\',this.value)">';
+h+='<option value="">To...</option>';
+for(var ni=0;ni<nodes.length;ni++){h+='<option value="'+esc(nodes[ni].id)+'"'+(e.to===nodes[ni].id?' selected':'')+'>'+esc(nodes[ni].label||nodes[ni].id)+'</option>';}
+h+='</select>';
+h+='<input type="text" class="sys-fb-input sys-fb-elabel" value="'+esc(e.label||'')+'" placeholder="Label (opt)" onchange="sysUpdateEdge('+i+',\'label\',this.value)">';
+h+='<button class="sys-fb-del" onclick="sysRemoveEdge('+i+')">'+ic('xic',12)+'</button>';
+h+='</div>';
+}
+h+='</div>';
+
+h+='<div style="margin-top:.75rem;text-align:right"><button class="sys-btn sys-btn-sm" onclick="sysPreviewFlow()">'+ic('activity',12)+' Preview Flow</button></div>';
+return h;
+}
+
+function renderSystemInner(){
+var wrap=document.getElementById('sysWrap');
+if(wrap)wrap.innerHTML=renderSystemInnerHtml();
+setupSystemPage();
+}
+
+function setupSystemPage(){
+var ta=document.getElementById('sysPromptEditor');
+if(ta){
+ta.addEventListener('input',function(){
+var est=document.getElementById('sysTokenEst');
+var cc=document.getElementById('sysCharCount');
+if(est)est.textContent='~'+Math.round(ta.value.length/4)+' tokens';
+if(cc)cc.textContent=ta.value.length+' chars';
+});
+}
+renderMermaidBlocks();
+}
+
+window.sysSavePrompt=function(){
+var ta=document.getElementById('sysPromptEditor');
+if(!ta)return;
+api('/api/system/prompt',{method:'POST',body:{prompt:ta.value}}).then(function(){
+sysState.prompt=ta.value;sysState.promptDirty=false;toast('System prompt saved','info');
+}).catch(function(e){toast('Failed: '+e.message,'error');});
+};
+
+window.sysGenMermaid=function(){
+var ta=document.getElementById('sysPromptEditor');
+var prompt=ta?ta.value:sysState.prompt;
+api('/api/system/prompt/mermaid',{method:'POST',body:{prompt:prompt,nodes:sysState.nodes,edges:sysState.edges}}).then(function(d){
+sysState.mermaidSrc=d.mermaid||'';
+var wrap=document.getElementById('sysMermaidWrap');
+if(wrap){wrap.innerHTML='<div class="mermaid-render" data-mermaid-src="'+esc(sysState.mermaidSrc)+'"></div>';renderMermaidBlocks();}
+}).catch(function(e){toast('Failed: '+e.message,'error');});
+};
+
+window.sysAddNode=function(){
+var id='N'+Date.now().toString(36);
+sysState.nodes.push({id:id,label:'',type:'process'});
+var fb=document.getElementById('sysFlowBuilder');
+if(fb){fb.innerHTML=renderFlowBuilder();}
+};
+window.sysRemoveNode=function(idx){
+var removed=sysState.nodes.splice(idx,1)[0];
+if(removed)sysState.edges=sysState.edges.filter(function(e){return e.from!==removed.id&&e.to!==removed.id;});
+var fb=document.getElementById('sysFlowBuilder');if(fb)fb.innerHTML=renderFlowBuilder();
+};
+window.sysUpdateNode=function(idx,key,val){
+if(sysState.nodes[idx])sysState.nodes[idx][key]=val;
+};
+window.sysAddEdge=function(){
+sysState.edges.push({from:'',to:'',label:''});
+var fb=document.getElementById('sysFlowBuilder');if(fb)fb.innerHTML=renderFlowBuilder();
+};
+window.sysRemoveEdge=function(idx){
+sysState.edges.splice(idx,1);
+var fb=document.getElementById('sysFlowBuilder');if(fb)fb.innerHTML=renderFlowBuilder();
+};
+window.sysUpdateEdge=function(idx,key,val){
+if(sysState.edges[idx])sysState.edges[idx][key]=val;
+};
+window.sysPreviewFlow=function(){
+api('/api/system/prompt/mermaid',{method:'POST',body:{prompt:'',nodes:sysState.nodes,edges:sysState.edges}}).then(function(d){
+sysState.mermaidSrc=d.mermaid||'';
+var wrap=document.getElementById('sysMermaidWrap');
+if(wrap){wrap.innerHTML='<div class="mermaid-render" data-mermaid-src="'+esc(sysState.mermaidSrc)+'"></div>';renderMermaidBlocks();}
+}).catch(function(e){toast('Failed: '+e.message,'error');});
+};
+
+window.sysSaveBlueprint=function(){
+var ta=document.getElementById('sysPromptEditor');
+var prompt=ta?ta.value:sysState.prompt;
+avaPrompt('Blueprint name:','',function(name){
+if(!name)return;
+avaPrompt('Description (optional):','',function(desc){
+api('/api/system/blueprints',{method:'POST',body:{name:name,description:desc,prompt:prompt,nodes:sysState.nodes,edges:sysState.edges}}).then(function(bp){
+sysState.blueprints.unshift(bp);
+var list=document.getElementById('sysBlueprintList');
+if(list){renderSystemInner();}
+toast('Blueprint saved','info');
+}).catch(function(e){toast('Failed: '+e.message,'error');});
+},{title:'Blueprint Description',okText:'Save'});
+},{title:'Save Blueprint',okText:'Next'});
+};
+
+window.sysLoadBlueprint=function(id){
+api('/api/system/blueprints/'+encodeURIComponent(id),{silent:true}).then(function(bp){
+sysState.prompt=bp.prompt||'';
+sysState.nodes=bp.nodes||[];
+sysState.edges=bp.edges||[];
+sysState.mermaidSrc='';
+renderSystemInner();
+toast('Blueprint loaded: '+bp.name,'info');
+}).catch(function(e){toast('Failed: '+e.message,'error');});
+};
+
+window.sysDeployBlueprint=function(id){
+avaConfirm('Deploy this blueprint as the active system prompt?',function(){
+api('/api/system/blueprints/'+encodeURIComponent(id)+'/deploy',{method:'POST'}).then(function(){
+toast('Blueprint deployed as active prompt','info');
+loadSystemData();
+}).catch(function(e){toast('Failed: '+e.message,'error');});
+},{title:'Deploy Blueprint',okText:'Deploy',danger:false});
+};
+
+window.sysDeleteBlueprint=function(id){
+avaConfirm('Delete this blueprint permanently?',function(){
+api('/api/system/blueprints/'+encodeURIComponent(id),{method:'DELETE'}).then(function(){
+sysState.blueprints=sysState.blueprints.filter(function(b){return b.id!==id;});
+renderSystemInner();
+toast('Blueprint deleted','info');
+}).catch(function(e){toast('Failed: '+e.message,'error');});
+},{title:'Delete Blueprint'});
+};
 
 /* ── Settings Page ────────────────────────────────────── */
 function renderSettings(){

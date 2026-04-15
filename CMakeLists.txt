@@ -87,6 +87,7 @@ set(SOURCES
   src/server/RoutesKnowledge.cpp
   src/server/RoutesApps.cpp
   src/server/RoutesServices.cpp
+  src/server/RoutesSystem.cpp
   src/server/LogBuffer.cpp
   src/db/Database.cpp
   src/services/ServiceManager.cpp
