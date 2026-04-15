@@ -1415,7 +1415,23 @@ var src=el.getAttribute('data-mermaid-src');
 if(!src)return;
 try{mermaid.render('mmd'+Math.random().toString(36).slice(2,8),src).then(function(r){
 el.innerHTML=r.svg;
+var svg=el.querySelector('svg');
+if(svg){
+svg.style.overflow='visible';
+svg.style.maxWidth='none';
+svg.removeAttribute('width');
+requestAnimationFrame(function(){
+var bb=svg.getBBox();
+if(bb&&bb.width>0){
+var pad=40;
+var vb=(bb.x-pad)+' '+(bb.y-pad)+' '+(bb.width+pad*2)+' '+(bb.height+pad*2);
+svg.setAttribute('viewBox',vb);
+svg.setAttribute('width',bb.width+pad*2);
+svg.setAttribute('height',bb.height+pad*2);
+}
 initPanZoom(el);
+});
+}
 }).catch(function(err){el.innerHTML='<div class="mermaid-error">Diagram error: '+err.message+'</div>';});}
 catch(err){el.innerHTML='<div class="mermaid-error">Diagram error: '+err.message+'</div>';}
 });
@@ -1509,9 +1525,9 @@ container._pzApply=applyTransform;
 
 requestAnimationFrame(function(){
 var cRect=container.getBoundingClientRect();
-var bb=svg.getBBox?svg.getBBox():{x:0,y:0,width:svg.scrollWidth,height:svg.scrollHeight};
-var sW=bb.width+bb.x*2||svg.scrollWidth;
-var sH=bb.height+bb.y*2||svg.scrollHeight;
+var sW=parseFloat(svg.getAttribute('width'))||svg.scrollWidth||svg.getBoundingClientRect().width;
+var sH=parseFloat(svg.getAttribute('height'))||svg.scrollHeight||svg.getBoundingClientRect().height;
+if(!sW||!sH){var bb=svg.getBBox?svg.getBBox():{x:0,y:0,width:100,height:100};sW=bb.width+bb.x*2;sH=bb.height+bb.y*2;}
 state._origW=sW;state._origH=sH;
 if(sW>0&&sH>0&&cRect.width>0&&cRect.height>0){
 var fit=Math.min(cRect.width/sW,cRect.height/sH,1);
@@ -4853,7 +4869,7 @@ function initApp(){
 S.route=getRoute();
 S.token=localStorage.getItem('avacli_token')||'';
 S.user={username:localStorage.getItem('avacli_user')||'admin',is_admin:localStorage.getItem('avacli_is_admin')!=='0'};
-if(typeof mermaid!=='undefined'){mermaid.initialize({startOnLoad:false,theme:'dark',themeVariables:{primaryColor:'#7c3aed',primaryTextColor:'#e2e2e8',primaryBorderColor:'rgba(255,255,255,0.08)',lineColor:'#a855f7',secondaryColor:'#12121e',tertiaryColor:'#0a0a14',background:'#0c0c18',mainBkg:'#12121e',nodeBorder:'rgba(255,255,255,0.08)',clusterBkg:'rgba(124,58,237,0.08)',titleColor:'#c4b5fd',edgeLabelBackground:'#0a0a14',textColor:'#e2e2e8'}});}
+if(typeof mermaid!=='undefined'){mermaid.initialize({startOnLoad:false,theme:'dark',flowchart:{useMaxWidth:false,htmlLabels:true,padding:20,nodeSpacing:50,rankSpacing:60},themeVariables:{primaryColor:'#7c3aed',primaryTextColor:'#e2e2e8',primaryBorderColor:'rgba(255,255,255,0.08)',lineColor:'#a855f7',secondaryColor:'#12121e',tertiaryColor:'#0a0a14',background:'#0c0c18',mainBkg:'#12121e',nodeBorder:'rgba(255,255,255,0.08)',clusterBkg:'rgba(124,58,237,0.08)',titleColor:'#c4b5fd',edgeLabelBackground:'#0a0a14',textColor:'#e2e2e8'}});}
 
 api('/api/auth/me',{silent:true}).then(function(u){
 if(u&&u.username){S.user={username:u.username,is_admin:!!u.is_admin,has_password:!!u.has_password};localStorage.setItem('avacli_user',u.username);localStorage.setItem('avacli_is_admin',u.is_admin?'1':'0');}
