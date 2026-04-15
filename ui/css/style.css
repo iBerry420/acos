@@ -591,7 +591,7 @@ body{background:var(--bg-body);color:var(--text-primary);font-family:var(--font)
 .sys-textarea{flex:1;width:100%;min-height:280px;resize:vertical;background:var(--bg-body);border:none;color:var(--text-primary);font-family:var(--mono);font-size:.8125rem;line-height:1.6;padding:.75rem 1rem;outline:none;box-sizing:border-box}
 .sys-textarea:focus{background:rgba(124,58,237,0.02)}
 .sys-prompt-meta{display:flex;justify-content:space-between;padding:.375rem .75rem;font-size:.6875rem;color:var(--text-muted);border-top:1px solid var(--border)}
-.sys-mermaid-wrap{flex:1;height:420px;padding:0;overflow:hidden;position:relative}
+.sys-mermaid-wrap{flex:1 0 420px;padding:0;overflow:hidden;position:relative}
 .sys-mermaid-wrap .mermaid-render{width:100%;height:100%;position:relative;overflow:hidden}
 .sys-flow-empty{text-align:center;color:var(--text-muted);font-size:.8125rem;padding:2rem}
 .sys-flow-empty p{margin-top:.5rem}
@@ -686,7 +686,7 @@ body{background:var(--bg-body);color:var(--text-primary);font-family:var(--font)
 @media(max-width:768px){
 .sys-grid{grid-template-columns:1fr}
 .sys-textarea{min-height:200px}
-.sys-mermaid-wrap{height:300px}
+.sys-mermaid-wrap{flex-basis:300px}
 .mermaid-block .mermaid-render{height:250px}
 .sys-blueprints{grid-template-columns:1fr}
 .sys-fb-edge{flex-direction:column;align-items:stretch}
