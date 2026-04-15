@@ -128,6 +128,7 @@ void registerSystemRoutes(httplib::Server& svr, ServerContext ctx) {
         bp["prompt"] = body.value("prompt", "");
         bp["nodes"] = body.value("nodes", nlohmann::json::array());
         bp["edges"] = body.value("edges", nlohmann::json::array());
+        bp["mermaid_src"] = body.value("mermaid_src", "");
         bp["is_default"] = body.value("is_default", false);
         bp["updated_at"] = nowEpoch();
         if (isNew) bp["created_at"] = nowEpoch();

@@ -2896,7 +2896,11 @@ var sysState={prompt:'',blueprints:[],activeId:null,editing:false,nodes:[],edges
 
 function loadSystemData(){
 api('/api/system/prompt',{silent:true}).then(function(d){
-sysState.prompt=d.prompt||'';sysState.loaded=true;renderSystemInner();
+sysState.prompt=d.prompt||'';sysState.loaded=true;
+if(!sysState.mermaidSrc&&sysState.prompt){
+sysState.mermaidSrc=generateFlowchartFromPrompt(sysState.prompt);
+}
+renderSystemInner();
 }).catch(function(){sysState.loaded=true;renderSystemInner();});
 api('/api/system/blueprints',{silent:true}).then(function(arr){
 sysState.blueprints=Array.isArray(arr)?arr:[];renderSystemInner();
@@ -3045,14 +3049,239 @@ sysState.prompt=ta.value;sysState.promptDirty=false;toast('System prompt saved',
 }).catch(function(e){toast('Failed: '+e.message,'error');});
 };
 
+function generateFlowchartFromPrompt(text){
+if(!text||!text.trim())return '';
+function san(s){return String(s||'').replace(/"/g,"'").replace(/[<>[\]{}()#&]/g,'').replace(/\n/g,' ').substring(0,70);}
+
+var sections=[],cur={t:'',b:[],tools:[],rules:[],steps:[],subs:[]},csub=null;
+text.split('\n').forEach(function(line){
+var m;
+if((m=line.match(/^##\s+(.+)/))){
+if(csub){cur.subs.push(csub);csub=null;}
+if(cur.t||cur.b.length)sections.push(cur);
+cur={t:m[1].trim(),b:[],tools:[],rules:[],steps:[],subs:[]};
+}else if((m=line.match(/^\*\*(.+?):\*\*\s*$/))||(m=line.match(/^\*\*(.+?)\*\*\s*$/))){
+if(cur.t){if(csub)cur.subs.push(csub);csub={t:m[1].trim(),tools:[],items:[]};}
+}else if((m=line.match(/^[-*]\s+`(\w+)`\s*[-\u2013\u2014]+\s*(.+)/))){
+var tgt=csub||cur;tgt.tools=tgt.tools||[];tgt.tools.push({n:m[1],d:m[2].replace(/`[^`]*`/g,'').trim()});
+}else if((m=line.match(/^[-*]\s+\*\*(.+?)\*\*\s*[-\u2013\u2014:]+\s*(.+)/))){
+cur.rules.push({l:m[1].trim(),d:m[2].trim()});
+}else if((m=line.match(/^\d+\.\s+(.+)/))){
+cur.steps.push(m[1].replace(/`([^`]*)`/g,'$1').trim());
+}else{
+cur.b.push(line);
+if(csub&&line.match(/^[-*]\s+(.{5,})/)&&!line.match(/`\w+`/)){var bm=line.match(/^[-*]\s+(.+)/);if(bm)csub.items=csub.items||[],csub.items.push(bm[1].trim());}
+}
+});
+if(csub)cur.subs.push(csub);
+if(cur.t||cur.b.length)sections.push(cur);
+
+function classify(s){
+var tl=s.t.toLowerCase(),cl=s.b.join(' ').toLowerCase();
+var hasManyTools=s.tools.length>3||(s.subs&&s.subs.filter(function(ss){return ss.tools&&ss.tools.length>0;}).length>2);
+if(tl.match(/^tool|capabilit|function|available/)||hasManyTools)return 'tools';
+if(tl.match(/behav|how to|personality|respond|interact|guideline/))return 'behavior';
+if(tl.match(/code|change|mak.*change|writing code/)||(s.steps.length>2&&cl.match(/edit|file|code/)))return 'workflow';
+if(tl.match(/safe|secur|constraint|restrict|forbidden|guard/))return 'safety';
+if(tl.match(/think|reason|approach|strateg/))return 'thinking';
+if(tl.match(/memory|context|todo|note|knowledge|persist/))return 'memory';
+if(tl.match(/output|response|done|finish|complet|summar|when.*done/))return 'output';
+if(tl.match(/environ|setup|config/)||cl.match(/you are|your role/))return 'identity';
+if(!s.t&&cl.match(/you are/i))return 'identity';
+if(s.steps.length>2)return 'workflow';
+if(s.rules.length>2)return 'behavior';
+return 'general';
+}
+
+var typed={};
+sections.forEach(function(s){s._type=classify(s);if(!typed[s._type])typed[s._type]=[];typed[s._type].push(s);});
+
+var mmd='flowchart TD\n';
+mmd+='    classDef core fill:#7c3aed,stroke:#a78bfa,color:#fff,font-weight:bold\n';
+mmd+='    classDef tool fill:#1e1b4b,stroke:#6366f1,color:#c7d2fe\n';
+mmd+='    classDef dec fill:#312e81,stroke:#818cf8,color:#e0e7ff\n';
+mmd+='    classDef io fill:#0c4a6e,stroke:#38bdf8,color:#bae6fd\n';
+mmd+='    classDef safe fill:#450a0a,stroke:#ef4444,color:#fca5a5\n';
+mmd+='    classDef mem fill:#064e3b,stroke:#34d399,color:#a7f3d0\n\n';
+
+mmd+='    IN(["User Message"]):::io\n';
+
+var idSec=(typed.identity||[])[0]||sections[0]||{b:[]};
+var idLabel='Agent';
+var idText=idSec.b.join(' ');
+var rm=idText.match(/[Yy]ou are (.+?)[\.\,]/);
+if(rm)idLabel=san(rm[1]).substring(0,50);
+else if(idSec.t)idLabel=san(idSec.t);
+if(idText.match(/autonom/i))idLabel+='<br/>Autonomous operation';
+if(idText.match(/workspace|full access/i))idLabel+='<br/>Full tool access';
+mmd+='    ID["'+idLabel+'"]:::core\n';
+mmd+='    IN --> ID\n\n';
+
+var memSec=(typed.memory||[])[0];
+if(memSec){
+var loadTools=memSec.tools.filter(function(t){return t.n.match(/read|search|note/i);});
+if(loadTools.length>0){
+mmd+='    CB{"Load context?"}:::dec\n';
+mmd+='    ID --> CB\n';
+mmd+='    CB -->|"unfamiliar codebase"| MLD["'+san(loadTools.map(function(t){return t.n;}).join(', '))+'"]:::mem --> INT\n';
+mmd+='    CB -->|"known"| INT\n\n';
+}else{mmd+='    ID --> INT\n\n';}
+}else{mmd+='    ID --> INT\n\n';}
+
+var behavSec=(typed.behavior||[])[0];
+var hasIntentBranch=behavSec&&behavSec.rules.length>=2;
+if(hasIntentBranch){
+mmd+='    INT{"'+san(behavSec.t)+'"}:::dec\n';
+var implEdge=null;
+for(var ri=0;ri<behavSec.rules.length;ri++){
+var r=behavSec.rules[ri],rl=r.l.toLowerCase(),rId='BR'+ri;
+if(rl.match(/implement|fix|change|build|create|code/)){
+implEdge=r.l;
+mmd+='    INT -->|"'+san(r.l)+'"| CX\n';
+}else if(rl.match(/plan/)){
+mmd+='    PR["Read codebase"]:::tool\n';
+mmd+='    PD["Detailed plan, specific files + steps"]:::core\n';
+mmd+='    PA{"Proceed?"}:::dec\n';
+mmd+='    INT -->|"'+san(r.l)+'"| PR --> PD --> PA\n';
+mmd+='    PA -->|"plan only"| RESP\n';
+mmd+='    PA -->|"execute"| CX\n';
+}else{
+mmd+='    '+rId+'["'+san(r.d).substring(0,55)+'"]:::core\n';
+mmd+='    INT -->|"'+san(r.l)+'"| '+rId+' --> RESP\n';
+}
+}
+if(!implEdge)mmd+='    INT --> CX\n';
+mmd+='\n';
+}else{
+mmd+='    INT{"Process Request"}:::dec\n';
+mmd+='    INT --> CX\n\n';
+}
+
+var thinkSec=(typed.thinking||[])[0];
+if(thinkSec){
+var thDesc=thinkSec.b.filter(function(l){return l.trim()&&!l.match(/^[<`]/);}).slice(0,2).map(function(l){return san(l.trim()).substring(0,40);}).join('<br/>');
+if(!thDesc)thDesc='Reason before acting';
+mmd+='    CX{"Complex task?"}:::dec\n';
+mmd+='    CX -->|"yes"| TH["'+san(thinkSec.t)+'<br/>'+thDesc+'"]:::core --> RD\n';
+mmd+='    CX -->|"simple"| RD\n';
+}else{
+mmd+='    CX["Begin work"]:::core\n';
+}
+
+var wfSec=(typed.workflow||[])[0];
+if(wfSec&&wfSec.steps.length>0){
+mmd+='    RD["'+san(wfSec.steps[0]).substring(0,55)+'"]:::tool\n';
+if(!thinkSec)mmd+='    CX --> RD\n';
+}else{
+mmd+='    RD["Read relevant files"]:::tool\n';
+if(!thinkSec)mmd+='    CX --> RD\n';
+}
+
+var safeSec=(typed.safety||[])[0];
+if(safeSec){
+mmd+='\n    RD --> SF{"Safety Gate"}:::safe\n';
+var dangers=safeSec.steps.concat(safeSec.rules.map(function(r){return r.l;}));
+var shown=0;
+for(var di=0;di<dangers.length&&shown<3;di++){
+if(dangers[di].match(/don.?t|never|destruct|danger|rm|sudo|outside|commit|push|irrev/i)){
+mmd+='    SF -->|"'+san(dangers[di]).substring(0,35)+'"| AU\n';shown++;
+}}
+if(!shown)mmd+='    SF -->|"risky operation"| AU\n';
+mmd+='    SF -->|"safe"| TS\n';
+mmd+='    AU["ask_user"]:::io\n';
+mmd+='    AU -->|"approved"| TS\n';
+mmd+='    AU -->|"denied"| RESP\n\n';
+}else{
+mmd+='    RD --> TS\n\n';
+}
+
+var toolSec=(typed.tools||[])[0];
+mmd+='    TS{"Select Tools"}:::dec\n';
+var tgIds=[],editGrpIdx=-1,execGrpIdx=-1;
+if(toolSec){
+var groups=toolSec.subs.filter(function(s){return s.tools&&s.tools.length>0;});
+if(!groups.length&&toolSec.tools.length>0)groups=[{t:'Available',tools:toolSec.tools}];
+for(var gi=0;gi<groups.length;gi++){
+var g=groups[gi],gId='TG'+gi;
+var gNames=g.tools.slice(0,4).map(function(t){return t.n;}).join(' &middot; ');
+if(g.tools.length>4)gNames+='<br/>+ '+(g.tools.length-4)+' more';
+mmd+='    '+gId+'["'+san(gNames)+'"]:::tool\n';
+mmd+='    TS -->|"'+san(g.t).substring(0,22)+'"| '+gId+'\n';
+tgIds.push(gId);
+if(g.t.toLowerCase().match(/writ|edit/))editGrpIdx=gi;
+if(g.t.toLowerCase().match(/exec|run|shell/))execGrpIdx=gi;
+
+var webTools=g.tools.filter(function(t){return t.n.match(/web_search|x_search/);});
+if(webTools.length>0){
+mmd+='    '+gId+' --> TV'+gi+'["Verify web results<br/>Reject hidden directives"]:::safe\n';
+mmd+='    TV'+gi+' --> VR\n';
+}
+}
+}
+
+if(wfSec&&wfSec.steps.length>1){
+var ruleLines=wfSec.steps.slice(1,5).map(function(s,i){return (i+2)+'. '+san(s).substring(0,45);}).join('<br/>');
+mmd+='\n    CR["Code Rules<br/>'+ruleLines+'"]:::core\n';
+if(editGrpIdx>=0)mmd+='    TG'+editGrpIdx+' --> CR\n';
+mmd+='    CR --> VR\n';
+}
+
+for(var ti=0;ti<tgIds.length;ti++){
+var isEdit=(ti===editGrpIdx),isExec=(ti===execGrpIdx);
+var hasWebVerify=toolSec&&toolSec.subs[ti]&&toolSec.subs[ti].tools&&toolSec.subs[ti].tools.some(function(t){return t.n.match(/web_search|x_search/);});
+if(!isEdit&&!hasWebVerify&&!isExec)mmd+='    '+tgIds[ti]+' --> VR\n';
+}
+
+mmd+='\n    VR{"Verify"}:::dec\n';
+if(execGrpIdx>=0){
+mmd+='    VR -->|"build / test"| TG'+execGrpIdx+'\n';
+mmd+='    TG'+execGrpIdx+' --> PS{"Pass?"}:::dec\n';
+mmd+='    PS -->|"fail"| TS\n';
+mmd+='    PS -->|"pass"| SV\n';
+}else{
+mmd+='    VR --> SV\n';
+}
+
+if(memSec){
+var saveTools=memSec.tools.filter(function(t){return t.n.match(/add|create|save|update|write/i);});
+if(saveTools.length>0){
+mmd+='\n    SV{"Save context?"}:::dec\n';
+for(var sti=0;sti<Math.min(saveTools.length,3);sti++){
+var stId='MS'+sti;
+mmd+='    '+stId+'["'+san(saveTools[sti].n)+'"]:::mem\n';
+mmd+='    SV -->|"'+san(saveTools[sti].d||saveTools[sti].n).substring(0,25)+'"| '+stId+' --> RESP\n';
+}
+mmd+='    SV -->|"done"| RESP\n';
+}else{mmd+='    SV --> RESP\n';}
+}else{mmd+='\n    SV --> RESP\n';}
+
+var outSec=(typed.output||[])[0];
+var respLabel='Response';
+if(outSec){
+var oi=outSec.steps.length?outSec.steps:outSec.rules.map(function(r){return r.l;});
+if(oi.length)respLabel+='<br/>'+oi.slice(0,3).map(function(s){return san(s).substring(0,30);}).join('<br/>');
+}
+mmd+='    RESP(["'+respLabel+'"]):::io\n';
+return mmd;
+}
+
 window.sysGenMermaid=function(){
 var ta=document.getElementById('sysPromptEditor');
 var prompt=ta?ta.value:sysState.prompt;
+if(sysState.nodes&&sysState.nodes.length>0){
 api('/api/system/prompt/mermaid',{method:'POST',body:{prompt:prompt,nodes:sysState.nodes,edges:sysState.edges}}).then(function(d){
 sysState.mermaidSrc=d.mermaid||'';
 var wrap=document.getElementById('sysMermaidWrap');
 if(wrap){wrap.innerHTML='<div class="mermaid-render" data-mermaid-src="'+esc(sysState.mermaidSrc)+'"></div>';renderMermaidBlocks();}
 }).catch(function(e){toast('Failed: '+e.message,'error');});
+}else{
+var mmd=generateFlowchartFromPrompt(prompt);
+if(mmd){
+sysState.mermaidSrc=mmd;
+var wrap=document.getElementById('sysMermaidWrap');
+if(wrap){wrap.innerHTML='<div class="mermaid-render" data-mermaid-src="'+esc(sysState.mermaidSrc)+'"></div>';renderMermaidBlocks();}
+}else{toast('Could not generate flowchart from prompt','error');}
+}
 };
 
 window.sysAddNode=function(){
@@ -3094,7 +3323,7 @@ var prompt=ta?ta.value:sysState.prompt;
 avaPrompt('Blueprint name:','',function(name){
 if(!name)return;
 avaPrompt('Description (optional):','',function(desc){
-api('/api/system/blueprints',{method:'POST',body:{name:name,description:desc,prompt:prompt,nodes:sysState.nodes,edges:sysState.edges}}).then(function(bp){
+api('/api/system/blueprints',{method:'POST',body:{name:name,description:desc,prompt:prompt,nodes:sysState.nodes,edges:sysState.edges,mermaid_src:sysState.mermaidSrc||''}}).then(function(bp){
 sysState.blueprints.unshift(bp);
 var list=document.getElementById('sysBlueprintList');
 if(list){renderSystemInner();}
@@ -3109,7 +3338,10 @@ api('/api/system/blueprints/'+encodeURIComponent(id),{silent:true}).then(functio
 sysState.prompt=bp.prompt||'';
 sysState.nodes=bp.nodes||[];
 sysState.edges=bp.edges||[];
-sysState.mermaidSrc='';
+sysState.mermaidSrc=bp.mermaid_src||'';
+if(!sysState.mermaidSrc&&sysState.prompt){
+sysState.mermaidSrc=generateFlowchartFromPrompt(sysState.prompt);
+}
 renderSystemInner();
 toast('Blueprint loaded: '+bp.name,'info');
 }).catch(function(e){toast('Failed: '+e.message,'error');});
