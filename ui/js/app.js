@@ -1506,6 +1506,21 @@ container.style.position='relative';container.style.overflow='hidden';
 container.appendChild(ctrl);
 container._pzState=state;
 container._pzApply=applyTransform;
+
+requestAnimationFrame(function(){
+var cRect=container.getBoundingClientRect();
+var bb=svg.getBBox?svg.getBBox():{x:0,y:0,width:svg.scrollWidth,height:svg.scrollHeight};
+var sW=bb.width+bb.x*2||svg.scrollWidth;
+var sH=bb.height+bb.y*2||svg.scrollHeight;
+state._origW=sW;state._origH=sH;
+if(sW>0&&sH>0&&cRect.width>0&&cRect.height>0){
+var fit=Math.min(cRect.width/sW,cRect.height/sH,1);
+state.scale=fit*0.92;
+state.x=(cRect.width-sW*state.scale)/2;
+state.y=Math.max(0,(cRect.height-sH*state.scale)/2);
+applyTransform();
+}
+});
 }
 
 window.pzZoom=function(btn,factor){
@@ -1524,7 +1539,16 @@ window.pzReset=function(btn){
 var c=btn.closest('.mermaid-render')||btn.closest('.sys-mermaid-wrap');
 if(!c)c=btn.parentElement.parentElement;
 if(!c||!c._pzState)return;
-c._pzState.x=0;c._pzState.y=0;c._pzState.scale=1;c._pzApply();
+var s=c._pzState;
+var cRect=c.getBoundingClientRect();
+var sW=s._origW||1;var sH=s._origH||1;
+if(sW>0&&sH>0&&cRect.width>0){
+var fit=Math.min(cRect.width/sW,cRect.height/sH,1);
+s.scale=fit*0.92;
+s.x=(cRect.width-sW*s.scale)/2;
+s.y=Math.max(0,(cRect.height-sH*s.scale)/2);
+}else{s.x=0;s.y=0;s.scale=1;}
+c._pzApply();
 };
 window.pzExportPng=function(btn){
 var c=btn.closest('.mermaid-render')||btn.closest('.sys-mermaid-wrap');
