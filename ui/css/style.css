@@ -535,8 +535,12 @@ body{background:var(--bg-body);color:var(--text-primary);font-family:var(--font)
 .mermaid-block .mermaid-render{position:relative;height:350px;overflow:hidden}
 .mermaid-block svg,.sys-mermaid-wrap svg{position:absolute;left:0;top:0;overflow:visible;max-width:none}
 .mermaid-error{color:#f87171;font-size:.8125rem;padding:.5rem}
+.nodeLabel{white-space:normal!important;word-wrap:break-word!important;overflow-wrap:break-word!important;max-width:220px!important;display:inline-block!important;text-align:center!important;line-height:1.35!important}
+.edgeLabel .nodeLabel{max-width:140px!important}
+.cluster-label .nodeLabel{max-width:none!important}
 .pz-controls{position:absolute;top:8px;right:8px;display:flex;flex-direction:column;gap:4px;z-index:5}
-.pz-btn{width:32px;height:32px;border-radius:8px;border:1px solid var(--border);background:rgba(12,12,24,0.85);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;padding:0}
+.pz-btn{width:32px;height:32px;border-radius:8px;border:1px solid var(--border);background:rgba(12,12,24,0.85);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);color:var(--text-secondary);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;padding:0;line-height:0}
+.pz-btn svg{display:block;flex-shrink:0}
 .pz-btn:hover{background:rgba(124,58,237,0.2);color:var(--accent-pale);border-color:var(--accent)}
 .pz-btn:active{transform:scale(0.9)}
 .ava-modal-backdrop{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.55);z-index:200;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .15s ease}
