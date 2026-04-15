@@ -50,6 +50,7 @@ struct ModelConfig {
     size_t      contextWindow = 131072;
     size_t      defaultMaxTokens = 65536;
     bool        reasoning = false;
+    bool        responsesApi = false;
     std::string type = "chat";  // "chat", "image_gen", "video_gen"
 };
 

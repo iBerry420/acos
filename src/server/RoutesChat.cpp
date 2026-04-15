@@ -127,6 +127,7 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
         std::string modeStr = body.value("mode", "agent");
         bool useHistory = body.value("use_history", true);
         int maxTokensOverride = body.value("max_tokens", 0);
+        std::string reasoningEffort = body.value("reasoning_effort", "");
 
         std::vector<std::string> notes;
         if (body.contains("notes") && body["notes"].is_array()) {
@@ -332,7 +333,7 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
         auto askState = ctx.askUserState;
         std::thread agentThread([eq, pushEvent, message, model, sessionName, modeStr,
                                  cancelFlag, busyFlag2, promptCounter, completionCounter, useHistory, notes,
-                                 chatEndpointUrl, apiKey, workspace, contextMedia, maxTokensOverride, askState]() {
+                                 chatEndpointUrl, apiKey, workspace, contextMedia, maxTokensOverride, reasoningEffort, askState]() {
           _threadAskUserState = askState;
           try {
             Mode mode = modeFromString(modeStr);
@@ -544,6 +545,7 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
 
             engine->setCancelFlag(cancelFlag);
             if (maxTokensOverride > 0) engine->setMaxTokensOverride(maxTokensOverride);
+            if (!reasoningEffort.empty()) engine->setReasoningEffort(reasoningEffort);
 
             bool ok = engine->run(client, model, sessionData->messages, tools, onUsage);
 

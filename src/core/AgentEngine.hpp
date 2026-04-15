@@ -53,11 +53,19 @@ public:
     void setVerboseToolOutput(bool v) { verboseToolOutput_ = v; }
     void setCancelFlag(std::atomic<bool>* p) { cancelFlag_ = p; }
     void setMaxTokensOverride(int n) { maxTokensOverride_ = n; }
+    void setReasoningEffort(const std::string& e) { reasoningEffort_ = e; }
 
     /// Build rich system prompt for the current mode.
     std::string buildSystemPrompt(Mode mode, const std::string& workspace);
 
 private:
+    bool runChatCompletions(XAIClient& client, const std::string& model,
+                            std::vector<Message>& messagesInOut,
+                            const std::vector<nlohmann::json>& tools, UsageFn onUsage);
+    bool runResponses(XAIClient& client, const std::string& model,
+                      std::vector<Message>& messagesInOut,
+                      const std::vector<nlohmann::json>& tools, UsageFn onUsage);
+
     std::string workspace_;
     Mode mode_;
     ToolExecutor* executor_;
@@ -70,6 +78,7 @@ private:
     bool verboseToolOutput_ = false;
     std::atomic<bool>* cancelFlag_ = nullptr;
     int maxTokensOverride_ = 0;
+    std::string reasoningEffort_;
 };
 
 } // namespace avacli

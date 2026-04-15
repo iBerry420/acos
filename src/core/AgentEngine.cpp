@@ -2,6 +2,7 @@
 #include "client/XAIClient.hpp"
 #include "config/ModelRegistry.hpp"
 #include "tools/ProjectNotes.hpp"
+#include "tools/ToolRegistry.hpp"
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 #include <filesystem>
@@ -217,6 +218,62 @@ std::string buildUnifiedPrompt(const std::string& workspace) {
 )";
 }
 
+/// Convert chat-completions-style messages to Responses API `input` array.
+/// System messages are excluded (handled via `instructions` parameter).
+std::vector<nlohmann::json> messagesToResponsesInput(const std::vector<Message>& messages) {
+    std::vector<nlohmann::json> input;
+    for (const auto& m : messages) {
+        if (m.role == "system") continue;
+
+        if (m.role == "user") {
+            if (!m.content_parts.empty()) {
+                auto parts = nlohmann::json::array();
+                for (const auto& p : m.content_parts) {
+                    nlohmann::json part;
+                    if (p.type == "text") {
+                        part["type"] = "input_text";
+                        part["text"] = p.text;
+                    } else if (p.type == "image_url") {
+                        part["type"] = "input_image";
+                        part["image_url"] = p.image_url;
+                    }
+                    parts.push_back(part);
+                }
+                input.push_back({{"role", "user"}, {"content", parts}});
+            } else {
+                input.push_back({{"role", "user"}, {"content", m.content}});
+            }
+        }
+        else if (m.role == "assistant") {
+            if (!m.tool_calls.empty()) {
+                for (const auto& tc : m.tool_calls) {
+                    input.push_back({
+                        {"type", "function_call"},
+                        {"call_id", tc.id},
+                        {"name", tc.name},
+                        {"arguments", tc.arguments}
+                    });
+                }
+            }
+            if (!m.content.empty()) {
+                input.push_back({
+                    {"type", "message"},
+                    {"role", "assistant"},
+                    {"content", nlohmann::json::array({{{"type", "output_text"}, {"text", m.content}}})}
+                });
+            }
+        }
+        else if (m.role == "tool") {
+            input.push_back({
+                {"type", "function_call_output"},
+                {"call_id", m.tool_call_id.value_or("")},
+                {"output", m.content}
+            });
+        }
+    }
+    return input;
+}
+
 } // namespace
 
 AgentEngine::AgentEngine(std::string workspace,
@@ -246,6 +303,19 @@ bool AgentEngine::run(XAIClient& client,
                       std::vector<Message>& messagesInOut,
                       const std::vector<nlohmann::json>& tools,
                       UsageFn onUsage) {
+    auto modelCfg = ModelRegistry::get(model);
+
+    if (modelCfg.responsesApi)
+        return runResponses(client, model, messagesInOut, tools, onUsage);
+
+    return runChatCompletions(client, model, messagesInOut, tools, onUsage);
+}
+
+bool AgentEngine::runChatCompletions(XAIClient& client,
+                                     const std::string& model,
+                                     std::vector<Message>& messagesInOut,
+                                     const std::vector<nlohmann::json>& tools,
+                                     UsageFn onUsage) {
     std::vector<Message> apiMessages = messagesInOut;
 
     if (apiMessages.empty() || apiMessages.front().role != "system") {
@@ -351,6 +421,121 @@ bool AgentEngine::run(XAIClient& client,
 
     if (turn >= MAX_TOOL_TURNS)
         spdlog::warn("[AgentEngine] Reached max tool turns");
+
+    messagesInOut = std::move(apiMessages);
+    return true;
+}
+
+bool AgentEngine::runResponses(XAIClient& client,
+                               const std::string& model,
+                               std::vector<Message>& messagesInOut,
+                               const std::vector<nlohmann::json>& tools,
+                               UsageFn onUsage) {
+    std::vector<Message> apiMessages = messagesInOut;
+
+    bool isMultiAgent = model.find("multi-agent") != std::string::npos;
+
+    std::string systemPrompt = buildSystemPrompt(mode_, workspace_);
+
+    std::vector<nlohmann::json> responsesTools;
+    if (isMultiAgent) {
+        responsesTools.push_back({{"type", "web_search"}});
+        responsesTools.push_back({{"type", "x_search"}});
+    } else {
+        responsesTools = ToolRegistry::toResponsesApiFormat(tools);
+    }
+
+    ChatOptions opts;
+    opts.model = model;
+    auto modelCfg = ModelRegistry::get(model);
+    if (!isMultiAgent) {
+        opts.maxTokens = modelCfg.defaultMaxTokens;
+        if (maxTokensOverride_ > 0) opts.maxTokens = maxTokensOverride_;
+    } else {
+        opts.maxTokens = 0;
+    }
+    opts.stream = true;
+    opts.cancelFlag = cancelFlag_;
+    if (!reasoningEffort_.empty())
+        opts.reasoningEffort = reasoningEffort_;
+    else if (opts.reasoningEffort.empty())
+        opts.reasoningEffort = "high";
+
+    spdlog::info("[AgentEngine] Using Responses API for model '{}' (effort={}, multi_agent={})",
+                 model, opts.reasoningEffort, isMultiAgent);
+
+    int turn = 0;
+    while (turn < MAX_TOOL_TURNS) {
+        ++turn;
+        spdlog::info("[AgentEngine] Responses turn {}", turn);
+
+        auto input = messagesToResponsesInput(apiMessages);
+
+        std::string fullResponse;
+        std::vector<ToolCall> toolCalls;
+
+        auto collectToolCalls = [&](const std::vector<ToolCall>& calls) {
+            toolCalls = calls;
+        };
+
+        bool ok = client.responsesStream(systemPrompt, input, opts, responsesTools, {
+            .onContent = [&](const std::string& delta) {
+                fullResponse += delta;
+                if (onStreamDelta_) onStreamDelta_(delta);
+            },
+            .onToolCalls = collectToolCalls,
+            .onUsage = [&](const Usage& u) {
+                if (onUsage) onUsage(u);
+            },
+            .onDone = [] {}
+        });
+
+        if (!ok) {
+            spdlog::error("[AgentEngine] Responses API failed: {}", client.lastError());
+            return false;
+        }
+
+        Message assistantMsg{"assistant", fullResponse};
+        assistantMsg.tool_calls = toolCalls;
+        apiMessages.push_back(std::move(assistantMsg));
+
+        if (toolCalls.empty()) {
+            spdlog::info("[AgentEngine] No tool calls - done");
+            break;
+        }
+
+        spdlog::info("[Tool] Executing {} tool call(s) from Responses API", toolCalls.size());
+
+        for (const auto& tc : toolCalls) {
+            if (onLogLine_)
+                onLogLine_(TranscriptChannel::Tool, "[Tool] " + tc.name + " ...");
+
+            if (onToolStart_) onToolStart_(tc.id, tc.name, tc.arguments);
+
+            std::string result = executor_->execute(tc.name, tc.arguments);
+
+            bool toolSuccess = true;
+            try {
+                auto jr = nlohmann::json::parse(result);
+                if (jr.contains("error")) toolSuccess = false;
+            } catch (...) {}
+            if (onToolDone_) onToolDone_(tc.id, tc.name, toolSuccess, result);
+
+            if (onLogLine_) {
+                std::string display = formatToolResultForDisplay(tc.name, result, verboseToolOutput_);
+                onLogLine_(TranscriptChannel::Tool, display);
+            }
+
+            Message toolMsg;
+            toolMsg.role = "tool";
+            toolMsg.tool_call_id = tc.id;
+            toolMsg.content = result;
+            apiMessages.push_back(std::move(toolMsg));
+        }
+    }
+
+    if (turn >= MAX_TOOL_TURNS)
+        spdlog::warn("[AgentEngine] Reached max tool turns (Responses)");
 
     messagesInOut = std::move(apiMessages);
     return true;

@@ -726,4 +726,31 @@ bool ToolRegistry::isCustomTool(const std::string& name) {
     return CUSTOM_TOOL_NAMES.count(name) > 0;
 }
 
+std::vector<nlohmann::json> ToolRegistry::toResponsesApiFormat(const std::vector<nlohmann::json>& chatTools) {
+    std::vector<nlohmann::json> out;
+
+    out.push_back({{"type", "web_search"}});
+    out.push_back({{"type", "x_search"}});
+
+    for (const auto& t : chatTools) {
+        if (!t.contains("function")) continue;
+        const auto& fn = t["function"];
+        std::string name = fn.value("name", "");
+
+        if (name == "web_search" || name == "x_search")
+            continue;
+
+        nlohmann::json tool;
+        tool["type"] = "function";
+        tool["name"] = name;
+        if (fn.contains("description"))
+            tool["description"] = fn["description"];
+        if (fn.contains("parameters"))
+            tool["parameters"] = fn["parameters"];
+        out.push_back(std::move(tool));
+    }
+
+    return out;
+}
+
 } // namespace avacli

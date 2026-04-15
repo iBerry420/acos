@@ -86,6 +86,7 @@ bool loadCache() {
             cfg.contextWindow = m.value("context_window", 131072);
             cfg.defaultMaxTokens = m.value("max_tokens", 65536);
             cfg.reasoning = m.value("reasoning", false);
+            cfg.responsesApi = m.value("responses_api", false);
             cfg.type = m.value("type", "chat");
             if (!cfg.id.empty()) dynamicModels.push_back(cfg);
         }
@@ -108,6 +109,7 @@ void saveCache() {
                 {"context_window", m.contextWindow},
                 {"max_tokens", m.defaultMaxTokens},
                 {"reasoning", m.reasoning},
+                {"responses_api", m.responsesApi},
                 {"type", m.type}
             });
         }
@@ -156,6 +158,9 @@ void parseModelsFromApi(const std::string& body, const std::string& type) {
             bool nameImpliesReasoning = id.find("reasoning") != std::string::npos
                                        && id.find("non-reasoning") == std::string::npos;
             cfg.reasoning = m.value("reasoning", nameImpliesReasoning);
+
+            bool nameImpliesResponses = id.find("multi-agent") != std::string::npos;
+            cfg.responsesApi = m.value("responses_api", nameImpliesResponses);
 
             if (type == "image_gen" || type == "video_gen") {
                 cfg.contextWindow = 0;
@@ -227,8 +232,9 @@ ModelConfig ModelRegistry::get(const std::string& id) {
 
     bool isReasoning = id.find("reasoning") != std::string::npos
                        && id.find("non-reasoning") == std::string::npos;
+    bool isResponses = id.find("multi-agent") != std::string::npos;
     size_t maxTok = isReasoning ? 81920 : 65536;
-    return {id, 131072, maxTok, isReasoning};
+    return {id, 131072, maxTok, isReasoning, isResponses};
 }
 
 std::vector<std::string> ModelRegistry::listIds() {
@@ -253,6 +259,7 @@ std::string ModelRegistry::listModelsJson() {
             {"context_window", m.contextWindow},
             {"max_output_tokens", m.defaultMaxTokens},
             {"reasoning", m.reasoning},
+            {"responses_api", m.responsesApi},
             {"type", m.type}
         });
     }

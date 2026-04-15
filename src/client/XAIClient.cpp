@@ -306,4 +306,263 @@ bool XAIClient::chatStream(const std::vector<Message>& messages,
     return true;
 }
 
+bool XAIClient::responsesStream(const std::string& instructions,
+                                const std::vector<nlohmann::json>& input,
+                                const ChatOptions& opts,
+                                const std::vector<nlohmann::json>& tools,
+                                const StreamCallbacks& callbacks) {
+    lastError_.clear();
+
+    if (apiKey_.empty()) {
+        lastError_ = "XAI_API_KEY not set";
+        return false;
+    }
+
+    nlohmann::json body;
+    body["model"] = opts.model;
+    body["stream"] = opts.stream;
+
+    if (!instructions.empty())
+        body["instructions"] = instructions;
+
+    body["input"] = input;
+
+    if (!tools.empty())
+        body["tools"] = tools;
+
+    if (!opts.reasoningEffort.empty())
+        body["reasoning"] = {{"effort", opts.reasoningEffort}};
+
+    if (opts.maxTokens > 0)
+        body["max_output_tokens"] = opts.maxTokens;
+
+    const std::string url = responsesUrl_;
+    const std::string jsonBody = body.dump();
+
+    struct RespStreamState {
+        std::map<size_t, ToolCall> toolCalls;
+        const StreamCallbacks* cbs = nullptr;
+        bool inReasoning = false;
+        std::string currentEventType;
+    } state;
+    state.cbs = &callbacks;
+
+    auto parseSSELine = [&state](const std::string& eventType, const std::string& data) {
+        if (data.empty() || data == "[DONE]") {
+            if (!state.toolCalls.empty() && state.cbs->onToolCalls) {
+                std::vector<ToolCall> calls;
+                for (size_t i = 0; i <= state.toolCalls.rbegin()->first; ++i) {
+                    if (state.toolCalls.count(i))
+                        calls.push_back(state.toolCalls[i]);
+                }
+                if (!calls.empty())
+                    state.cbs->onToolCalls(calls);
+                state.toolCalls.clear();
+            }
+            if (state.inReasoning && state.cbs->onContent) {
+                state.inReasoning = false;
+                state.cbs->onContent("</thought>");
+            }
+            if (state.cbs->onDone) state.cbs->onDone();
+            return;
+        }
+
+        try {
+            auto j = nlohmann::json::parse(data);
+            std::string type = j.value("type", "");
+
+            if (type == "response.output_text.delta") {
+                std::string delta = j.value("delta", "");
+                if (!delta.empty() && state.cbs->onContent) {
+                    if (state.inReasoning) {
+                        state.inReasoning = false;
+                        state.cbs->onContent("</thought>");
+                    }
+                    state.cbs->onContent(delta);
+                }
+            }
+            else if (type == "response.reasoning.delta" || type == "response.reasoning_summary_text.delta") {
+                std::string delta = j.value("delta", "");
+                if (!delta.empty() && state.cbs->onContent) {
+                    if (!state.inReasoning) {
+                        state.inReasoning = true;
+                        state.cbs->onContent("<thought>");
+                    }
+                    state.cbs->onContent(delta);
+                }
+            }
+            else if (type == "response.function_call_arguments.delta") {
+                size_t idx = j.value("output_index", (size_t)0);
+                if (!state.toolCalls.count(idx))
+                    state.toolCalls[idx] = ToolCall{};
+                state.toolCalls[idx].arguments += j.value("delta", "");
+            }
+            else if (type == "response.function_call_arguments.done") {
+                size_t idx = j.value("output_index", (size_t)0);
+                if (!state.toolCalls.count(idx))
+                    state.toolCalls[idx] = ToolCall{};
+                auto& tc = state.toolCalls[idx];
+                if (j.contains("call_id")) tc.id = j["call_id"].get<std::string>();
+                if (j.contains("name")) tc.name = j["name"].get<std::string>();
+                if (j.contains("arguments")) tc.arguments = j["arguments"].get<std::string>();
+            }
+            else if (type == "response.output_item.added") {
+                if (j.contains("item") && j["item"].is_object()) {
+                    auto& item = j["item"];
+                    if (item.value("type", "") == "function_call") {
+                        size_t idx = j.value("output_index", (size_t)0);
+                        if (!state.toolCalls.count(idx))
+                            state.toolCalls[idx] = ToolCall{};
+                        auto& tc = state.toolCalls[idx];
+                        if (item.contains("call_id")) tc.id = item["call_id"].get<std::string>();
+                        if (item.contains("name")) tc.name = item["name"].get<std::string>();
+                    }
+                }
+            }
+            else if (type == "response.completed" || type == "response.done") {
+                if (state.inReasoning && state.cbs->onContent) {
+                    state.inReasoning = false;
+                    state.cbs->onContent("</thought>");
+                }
+
+                if (!state.toolCalls.empty() && state.cbs->onToolCalls) {
+                    std::vector<ToolCall> calls;
+                    for (size_t i = 0; i <= state.toolCalls.rbegin()->first; ++i) {
+                        if (state.toolCalls.count(i))
+                            calls.push_back(state.toolCalls[i]);
+                    }
+                    if (!calls.empty())
+                        state.cbs->onToolCalls(calls);
+                    state.toolCalls.clear();
+                }
+
+                if (j.contains("response") && j["response"].is_object()) {
+                    const auto& resp = j["response"];
+                    if (resp.contains("usage") && state.cbs->onUsage) {
+                        Usage u;
+                        const auto& usage = resp["usage"];
+                        u.promptTokens = usage.value("input_tokens", (size_t)0);
+                        u.completionTokens = usage.value("output_tokens", (size_t)0);
+                        state.cbs->onUsage(u);
+                    }
+                }
+            }
+        } catch (const nlohmann::json::exception& e) {
+            spdlog::debug("XAIClient::responsesStream: JSON parse error: {}", e.what());
+        }
+    };
+
+    struct WriteContext {
+        std::string buffer;
+        std::string currentEvent;
+        RespStreamState* state = nullptr;
+        std::atomic<bool>* cancelFlag = nullptr;
+        std::function<void(const std::string&, const std::string&)> parse;
+    } ctx;
+    ctx.cancelFlag = opts.cancelFlag;
+    ctx.state = &state;
+    ctx.parse = parseSSELine;
+
+    static auto processBuffer = [](WriteContext* uc) {
+        size_t pos = 0;
+        while (pos < uc->buffer.size()) {
+            size_t lineEnd = uc->buffer.find('\n', pos);
+            if (lineEnd == std::string::npos) break;
+
+            std::string line = uc->buffer.substr(pos, lineEnd - pos);
+            pos = lineEnd + 1;
+
+            if (line.empty() || line == "\r") continue;
+            if (!line.empty() && line.back() == '\r')
+                line.pop_back();
+
+            if (line.compare(0, 6, "event:") == 0) {
+                std::string ev = line.substr(6);
+                auto s = ev.find_first_not_of(" \t");
+                uc->currentEvent = (s != std::string::npos) ? ev.substr(s) : "";
+            }
+            else if (line.compare(0, 5, "data:") == 0) {
+                std::string payload = line.substr(5);
+                auto s = payload.find_first_not_of(" \t");
+                payload = (s != std::string::npos) ? payload.substr(s) : "";
+
+                if (payload == "[DONE]") {
+                    uc->parse(uc->currentEvent, "[DONE]");
+                } else if (!payload.empty()) {
+                    uc->parse(uc->currentEvent, payload);
+                }
+            }
+        }
+        if (pos > 0) uc->buffer.erase(0, pos);
+    };
+
+    auto writeCb = +[](char* ptr, size_t size, size_t nmemb, void* user) -> size_t {
+        const size_t total = size * nmemb;
+        auto* uc = static_cast<WriteContext*>(user);
+        if (uc->cancelFlag && uc->cancelFlag->load(std::memory_order_relaxed))
+            return 0;
+        uc->buffer.append(ptr, total);
+        processBuffer(uc);
+        return total;
+    };
+
+    CURL* curl = curl_easy_init();
+    if (!curl) {
+        lastError_ = "Failed to init curl";
+        return false;
+    }
+
+    struct curl_slist* headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    {
+        std::string auth = "Authorization: Bearer " + apiKey_;
+        headers = curl_slist_append(headers, auth.c_str());
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, jsonBody.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 3600L);
+    curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, nullptr);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCb);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &ctx);
+
+    CURLcode res = curl_easy_perform(curl);
+
+    long httpCode = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+
+    if (res != CURLE_OK) {
+        if (res == CURLE_WRITE_ERROR && opts.cancelFlag && opts.cancelFlag->load(std::memory_order_relaxed)) {
+            lastError_ = "Cancelled";
+            return false;
+        }
+        lastError_ = curl_easy_strerror(res);
+        spdlog::error("XAIClient::responsesStream: {}", lastError_);
+        return false;
+    }
+
+    if (httpCode != 200) {
+        std::string errBody = ctx.buffer;
+        try {
+            auto j = nlohmann::json::parse(errBody);
+            if (j.contains("error") && j["error"].is_object())
+                lastError_ = "HTTP " + std::to_string(httpCode) + ": " + j["error"].value("message", errBody);
+            else if (j.contains("error") && j["error"].is_string())
+                lastError_ = "HTTP " + std::to_string(httpCode) + ": " + j["error"].get<std::string>();
+            else
+                lastError_ = "HTTP " + std::to_string(httpCode) + ": " + errBody.substr(0, 500);
+        } catch (...) {
+            lastError_ = "HTTP " + std::to_string(httpCode) + ": " + errBody.substr(0, 500);
+        }
+        spdlog::error("XAIClient::responsesStream: {}", lastError_);
+        return false;
+    }
+
+    return true;
+}
+
 } // namespace avacli

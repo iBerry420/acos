@@ -31,6 +31,11 @@ public:
 
     /// Check if a tool is custom (not built-in).
     static bool isCustomTool(const std::string& name);
+
+    /// Convert tools from chat completions format to Responses API format.
+    /// Flattens {"type":"function","function":{...}} to {"type":"function","name":...,"parameters":...}
+    /// and prepends server-side tools (web_search, x_search) while removing their function equivalents.
+    static std::vector<nlohmann::json> toResponsesApiFormat(const std::vector<nlohmann::json>& chatTools);
 };
 
 } // namespace avacli

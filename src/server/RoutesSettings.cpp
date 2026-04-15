@@ -54,6 +54,7 @@ void registerSettingsRoutes(httplib::Server& svr, ServerContext ctx) {
                 {"contextWindow", m.contextWindow},
                 {"defaultMaxTokens", m.defaultMaxTokens},
                 {"reasoning", m.reasoning},
+                {"responsesApi", m.responsesApi},
                 {"type", m.type}
             });
         }
