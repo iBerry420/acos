@@ -1,6 +1,9 @@
 #include "server/Routes.hpp"
 #include "server/ServerContext.hpp"
 #include "server/ServerHelpers.hpp"
+#include "client/XAIClient.hpp"
+#include "config/ModelRegistry.hpp"
+#include "tools/ToolRegistry.hpp"
 #include "platform/Paths.hpp"
 
 #include <httplib.h>
@@ -129,6 +132,8 @@ void registerSystemRoutes(httplib::Server& svr, ServerContext ctx) {
         bp["nodes"] = body.value("nodes", nlohmann::json::array());
         bp["edges"] = body.value("edges", nlohmann::json::array());
         bp["mermaid_src"] = body.value("mermaid_src", "");
+        bp["tools"] = body.value("tools", nlohmann::json::array());
+        bp["model_assignments"] = body.value("model_assignments", nlohmann::json::object());
         bp["is_default"] = body.value("is_default", false);
         bp["updated_at"] = nowEpoch();
         if (isNew) bp["created_at"] = nowEpoch();
@@ -194,6 +199,209 @@ void registerSystemRoutes(httplib::Server& svr, ServerContext ctx) {
         j["blueprint_id"] = id;
         j["prompt_path"] = promptPath;
         res.set_content(j.dump(), "application/json");
+    });
+
+    // List available tools for the agent builder
+    svr.Get("/api/system/tools", [](const httplib::Request&, httplib::Response& res) {
+        ToolRegistry::registerAll();
+        auto allTools = ToolRegistry::getToolsForMode(Mode::Agent);
+        nlohmann::json arr = nlohmann::json::array();
+        for (const auto& t : allTools) {
+            if (!t.contains("function")) continue;
+            auto& fn = t["function"];
+            arr.push_back({
+                {"name", fn.value("name", "")},
+                {"description", fn.value("description", "")},
+                {"category", "built-in"}
+            });
+        }
+        res.set_content(arr.dump(), "application/json");
+    });
+
+    // Agent Builder AI - generate a blueprint from natural language
+    svr.Post("/api/system/agent-builder", [ctx](const httplib::Request& req, httplib::Response& res) {
+        nlohmann::json body;
+        try { body = nlohmann::json::parse(req.body); } catch (...) {
+            res.status = 400;
+            res.set_content(R"({"error":"invalid JSON"})", "application/json");
+            return;
+        }
+
+        std::string description = body.value("description", "");
+        if (description.empty()) {
+            res.status = 400;
+            res.set_content(R"({"error":"description required"})", "application/json");
+            return;
+        }
+
+        auto selectedTools = body.value("tools", nlohmann::json::array());
+        auto selectedModels = body.value("models", nlohmann::json::object());
+
+        std::string apiKey, chatUrl;
+        resolveXaiAuth(*ctx.config, apiKey, chatUrl);
+        if (apiKey.empty()) {
+            res.status = 500;
+            res.set_content(R"({"error":"no API key configured"})", "application/json");
+            return;
+        }
+
+        ToolRegistry::registerAll();
+        auto allTools = ToolRegistry::getToolsForMode(Mode::Agent);
+        std::string toolList;
+        for (const auto& t : allTools) {
+            if (!t.contains("function")) continue;
+            auto& fn = t["function"];
+            toolList += "- `" + fn.value("name", "") + "` - " + fn.value("description", "") + "\n";
+        }
+
+        const auto& models = ModelRegistry::listAll();
+        std::string modelList;
+        for (const auto& m : models) {
+            modelList += "- `" + m.id + "` (context: " + std::to_string(m.contextWindow) +
+                         ", type: " + m.type + (m.reasoning ? ", reasoning" : "") + ")\n";
+        }
+
+        std::string selectedToolsStr;
+        if (!selectedTools.empty()) {
+            selectedToolsStr = "\n\nThe user has pre-selected these tools: ";
+            for (const auto& t : selectedTools) {
+                selectedToolsStr += "`" + t.get<std::string>() + "`, ";
+            }
+        }
+
+        std::string selectedModelsStr;
+        if (!selectedModels.empty()) {
+            selectedModelsStr = "\n\nThe user has pre-assigned these models: ";
+            for (auto& [step, model] : selectedModels.items()) {
+                selectedModelsStr += step + " -> `" + model.get<std::string>() + "`, ";
+            }
+        }
+
+        std::string metaPrompt = R"(You are an expert agent architect. Given a description of an agent's desired behavior, generate a complete agent blueprint.
+
+## Available Tools
+)" + toolList + R"(
+
+## Available Models
+)" + modelList + R"(
+
+## Instructions
+Generate a JSON object with these fields:
+1. `name` - Short name for the blueprint
+2. `description` - One-line description
+3. `prompt` - A complete system prompt (markdown) that instructs an LLM to behave as described. Be thorough but token-efficient. Include tool usage instructions.
+4. `tools` - Array of tool names the agent should use
+5. `model_assignments` - Object mapping step names to model IDs. Use reasoning models for complex analysis, fast models for simple processing, image models for image tasks, video models for video tasks. Keys should be descriptive step names.
+6. `flow_steps` - Array of objects with {name, description, model, type} where type is one of: process, decision, tool, io
+7. `flow_edges` - Array of objects with {from, to, label} connecting the flow steps by name
+
+The system prompt should:
+- Define the agent's identity and purpose clearly
+- Reference specific tools by name with usage instructions
+- Specify which model to use for which processing step (using model routing comments)
+- Be optimized for minimal tokens with maximum context
+- Include safety constraints and guardrails appropriate to the use case
+
+)" + selectedToolsStr + selectedModelsStr + R"(
+
+IMPORTANT: Return ONLY valid JSON, no markdown fences, no explanation text. Just the raw JSON object.)";
+
+        XAIClient client(apiKey, chatUrl);
+
+        std::string model = ctx.config->model;
+        if (model.empty()) model = "grok-3-mini";
+
+        std::vector<Message> messages;
+        messages.push_back({"system", metaPrompt});
+        messages.push_back({"user", description});
+
+        ChatOptions opts;
+        opts.model = model;
+        opts.maxTokens = 16384;
+        opts.stream = true;
+
+        std::string fullResponse;
+        bool ok = client.chatStream(messages, opts, {
+            .onContent = [&](const std::string& delta) { fullResponse += delta; },
+            .onToolCalls = [](const std::vector<ToolCall>&) {},
+            .onUsage = [](const Usage&) {},
+            .onDone = [] {}
+        });
+
+        if (!ok) {
+            res.status = 500;
+            nlohmann::json err;
+            err["error"] = "LLM generation failed: " + client.lastError();
+            res.set_content(err.dump(), "application/json");
+            return;
+        }
+
+        auto jsonStart = fullResponse.find('{');
+        auto jsonEnd = fullResponse.rfind('}');
+        if (jsonStart == std::string::npos || jsonEnd == std::string::npos || jsonEnd <= jsonStart) {
+            res.status = 500;
+            nlohmann::json err;
+            err["error"] = "Failed to parse LLM response as JSON";
+            err["raw"] = fullResponse.substr(0, 2000);
+            res.set_content(err.dump(), "application/json");
+            return;
+        }
+
+        std::string jsonStr = fullResponse.substr(jsonStart, jsonEnd - jsonStart + 1);
+        nlohmann::json result;
+        try {
+            result = nlohmann::json::parse(jsonStr);
+        } catch (const std::exception& e) {
+            res.status = 500;
+            nlohmann::json err;
+            err["error"] = std::string("JSON parse error: ") + e.what();
+            err["raw"] = jsonStr.substr(0, 2000);
+            res.set_content(err.dump(), "application/json");
+            return;
+        }
+
+        nlohmann::json nodes = nlohmann::json::array();
+        nlohmann::json edges = nlohmann::json::array();
+        if (result.contains("flow_steps") && result["flow_steps"].is_array()) {
+            for (const auto& step : result["flow_steps"]) {
+                std::string name = step.value("name", "step");
+                std::string cleanId = name;
+                for (char& c : cleanId) {
+                    if (!std::isalnum(c) && c != '_') c = '_';
+                }
+                nodes.push_back({
+                    {"id", cleanId},
+                    {"label", name + (step.contains("model") ? "\n[" + step.value("model", "") + "]" : "")},
+                    {"type", step.value("type", "process")},
+                    {"model", step.value("model", "")},
+                    {"description", step.value("description", "")}
+                });
+            }
+        }
+        if (result.contains("flow_edges") && result["flow_edges"].is_array()) {
+            for (const auto& edge : result["flow_edges"]) {
+                std::string from = edge.value("from", "");
+                std::string to = edge.value("to", "");
+                for (char& c : from) { if (!std::isalnum(c) && c != '_') c = '_'; }
+                for (char& c : to) { if (!std::isalnum(c) && c != '_') c = '_'; }
+                edges.push_back({
+                    {"from", from},
+                    {"to", to},
+                    {"label", edge.value("label", "")}
+                });
+            }
+        }
+
+        nlohmann::json blueprint;
+        blueprint["name"] = result.value("name", "AI-Generated Blueprint");
+        blueprint["description"] = result.value("description", description.substr(0, 100));
+        blueprint["prompt"] = result.value("prompt", "");
+        blueprint["tools"] = result.value("tools", nlohmann::json::array());
+        blueprint["model_assignments"] = result.value("model_assignments", nlohmann::json::object());
+        blueprint["nodes"] = nodes;
+        blueprint["edges"] = edges;
+
+        res.set_content(blueprint.dump(), "application/json");
     });
 
     // Generate Mermaid flowchart from prompt text

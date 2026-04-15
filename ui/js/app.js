@@ -1413,10 +1413,146 @@ if(el.getAttribute('data-rendered'))return;
 el.setAttribute('data-rendered','1');
 var src=el.getAttribute('data-mermaid-src');
 if(!src)return;
-try{mermaid.render('mmd'+Math.random().toString(36).slice(2,8),src).then(function(r){el.innerHTML=r.svg;}).catch(function(err){el.innerHTML='<div class="mermaid-error">Diagram error: '+err.message+'</div>';});}
+try{mermaid.render('mmd'+Math.random().toString(36).slice(2,8),src).then(function(r){
+el.innerHTML=r.svg;
+initPanZoom(el);
+}).catch(function(err){el.innerHTML='<div class="mermaid-error">Diagram error: '+err.message+'</div>';});}
 catch(err){el.innerHTML='<div class="mermaid-error">Diagram error: '+err.message+'</div>';}
 });
 }
+
+function initPanZoom(container){
+var svg=container.querySelector('svg');
+if(!svg||container.querySelector('.pz-controls'))return;
+var state={x:0,y:0,scale:1,dragging:false,startX:0,startY:0,lastDist:0};
+svg.style.transformOrigin='0 0';
+svg.style.cursor='grab';
+svg.style.transition='none';
+function applyTransform(){svg.style.transform='translate('+state.x+'px,'+state.y+'px) scale('+state.scale+')';}
+function clampScale(s){return Math.max(0.15,Math.min(5,s));}
+
+container.addEventListener('wheel',function(e){
+e.preventDefault();
+var rect=container.getBoundingClientRect();
+var mx=e.clientX-rect.left, my=e.clientY-rect.top;
+var delta=e.deltaY>0?0.9:1.1;
+var ns=clampScale(state.scale*delta);
+var ratio=ns/state.scale;
+state.x=mx-(mx-state.x)*ratio;
+state.y=my-(my-state.y)*ratio;
+state.scale=ns;
+applyTransform();
+},{passive:false});
+
+container.addEventListener('mousedown',function(e){
+if(e.button!==0)return;
+state.dragging=true;state.startX=e.clientX-state.x;state.startY=e.clientY-state.y;
+svg.style.cursor='grabbing';
+e.preventDefault();
+});
+window.addEventListener('mousemove',function(e){
+if(!state.dragging)return;
+state.x=e.clientX-state.startX;state.y=e.clientY-state.startY;
+applyTransform();
+});
+window.addEventListener('mouseup',function(){
+if(state.dragging){state.dragging=false;svg.style.cursor='grab';}
+});
+
+container.addEventListener('touchstart',function(e){
+if(e.touches.length===1){
+state.dragging=true;state.startX=e.touches[0].clientX-state.x;state.startY=e.touches[0].clientY-state.y;
+}else if(e.touches.length===2){
+state.dragging=false;
+var dx=e.touches[0].clientX-e.touches[1].clientX;
+var dy=e.touches[0].clientY-e.touches[1].clientY;
+state.lastDist=Math.sqrt(dx*dx+dy*dy);
+}
+},{passive:true});
+container.addEventListener('touchmove',function(e){
+if(e.touches.length===1&&state.dragging){
+e.preventDefault();
+state.x=e.touches[0].clientX-state.startX;state.y=e.touches[0].clientY-state.startY;
+applyTransform();
+}else if(e.touches.length===2){
+e.preventDefault();
+var dx=e.touches[0].clientX-e.touches[1].clientX;
+var dy=e.touches[0].clientY-e.touches[1].clientY;
+var dist=Math.sqrt(dx*dx+dy*dy);
+if(state.lastDist>0){
+var rect=container.getBoundingClientRect();
+var mx=(e.touches[0].clientX+e.touches[1].clientX)/2-rect.left;
+var my=(e.touches[0].clientY+e.touches[1].clientY)/2-rect.top;
+var ns=clampScale(state.scale*(dist/state.lastDist));
+var ratio=ns/state.scale;
+state.x=mx-(mx-state.x)*ratio;
+state.y=my-(my-state.y)*ratio;
+state.scale=ns;
+applyTransform();
+}
+state.lastDist=dist;
+}
+},{passive:false});
+container.addEventListener('touchend',function(e){
+state.dragging=false;state.lastDist=0;
+},{passive:true});
+
+var ctrl=document.createElement('div');ctrl.className='pz-controls';
+ctrl.innerHTML='<button class="pz-btn" onclick="pzZoom(this,1.3)" title="Zoom in">'+ic('plus',14)+'</button>'+
+'<button class="pz-btn" onclick="pzZoom(this,0.7)" title="Zoom out">'+ic('minus',14)+'</button>'+
+'<button class="pz-btn" onclick="pzReset(this)" title="Reset">'+ic('refresh',14)+'</button>'+
+'<button class="pz-btn" onclick="pzExportPng(this)" title="Save PNG">'+ic('download',14)+'</button>';
+container.style.position='relative';container.style.overflow='hidden';
+container.appendChild(ctrl);
+container._pzState=state;
+container._pzApply=applyTransform;
+}
+
+window.pzZoom=function(btn,factor){
+var c=btn.closest('.mermaid-render')||btn.closest('.sys-mermaid-wrap');
+if(!c)c=btn.parentElement.parentElement;
+if(!c||!c._pzState)return;
+var s=c._pzState;
+var rect=c.getBoundingClientRect();
+var mx=rect.width/2, my=rect.height/2;
+var ns=Math.max(0.15,Math.min(5,s.scale*factor));
+var ratio=ns/s.scale;
+s.x=mx-(mx-s.x)*ratio;s.y=my-(my-s.y)*ratio;
+s.scale=ns;c._pzApply();
+};
+window.pzReset=function(btn){
+var c=btn.closest('.mermaid-render')||btn.closest('.sys-mermaid-wrap');
+if(!c)c=btn.parentElement.parentElement;
+if(!c||!c._pzState)return;
+c._pzState.x=0;c._pzState.y=0;c._pzState.scale=1;c._pzApply();
+};
+window.pzExportPng=function(btn){
+var c=btn.closest('.mermaid-render')||btn.closest('.sys-mermaid-wrap');
+if(!c)c=btn.parentElement.parentElement;
+var svg=c?c.querySelector('svg'):null;
+if(!svg){toast('No diagram to export','error');return;}
+var svgData=new XMLSerializer().serializeToString(svg);
+var svgBlob=new Blob([svgData],{type:'image/svg+xml;charset=utf-8'});
+var url=URL.createObjectURL(svgBlob);
+var img=new Image();
+img.onload=function(){
+var scale=2;
+var canvas=document.createElement('canvas');
+canvas.width=img.width*scale;canvas.height=img.height*scale;
+var ctx2=canvas.getContext('2d');
+ctx2.fillStyle='#0c0c18';ctx2.fillRect(0,0,canvas.width,canvas.height);
+ctx2.drawImage(img,0,0,canvas.width,canvas.height);
+URL.revokeObjectURL(url);
+canvas.toBlob(function(blob){
+var a=document.createElement('a');a.href=URL.createObjectURL(blob);
+a.download='agent-flow-'+(new Date().toISOString().slice(0,10))+'.png';
+a.click();URL.revokeObjectURL(a.href);
+toast('PNG exported','success');
+},'image/png');
+};
+img.onerror=function(){URL.revokeObjectURL(url);toast('PNG export failed','error');};
+img.src=url;
+};
 window.chatKey=function(e){
 var ctrlSend=S.ctrlEnterSend!==false;
 if(ctrlSend){if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();sendMsg();}}
@@ -2892,7 +3028,10 @@ if(logAutoScroll&&wasAtBottom){var c2=document.getElementById('logContainer');if
 }
 
 /* ── System Page ──────────────────────────────────────── */
-var sysState={prompt:'',blueprints:[],activeId:null,editing:false,nodes:[],edges:[],bpName:'',bpDesc:'',loaded:false,mermaidSrc:'',promptDirty:false,flowDirty:false};
+var sysState={prompt:'',blueprints:[],activeId:null,editing:false,nodes:[],edges:[],bpName:'',bpDesc:'',loaded:false,mermaidSrc:'',promptDirty:false,flowDirty:false,
+availableTools:null,availableModels:null,
+ab:{desc:'',selectedTools:{},modelAssignments:{},generating:false,result:null,showToolPicker:false,showModelPicker:false}
+};
 
 function loadSystemData(){
 api('/api/system/prompt',{silent:true}).then(function(d){
@@ -2905,6 +3044,16 @@ renderSystemInner();
 api('/api/system/blueprints',{silent:true}).then(function(arr){
 sysState.blueprints=Array.isArray(arr)?arr:[];renderSystemInner();
 }).catch(function(){});
+if(!sysState.availableTools){
+api('/api/system/tools',{silent:true}).then(function(d){
+sysState.availableTools=Array.isArray(d)?d:[];
+}).catch(function(){sysState.availableTools=[];});
+}
+if(!sysState.availableModels){
+api('/api/models',{silent:true}).then(function(d){
+sysState.availableModels=Array.isArray(d)?d:[];
+}).catch(function(){sysState.availableModels=[];});
+}
 }
 
 function renderSystem(){
@@ -2942,6 +3091,107 @@ h+='</div>';
 
 h+='</div>'; // /sys-grid
 
+// Agent Builder AI
+h+='<div class="sys-section ab-section">';
+h+='<div class="sys-section-head"><h3>'+ic('zap',16)+' Agent Builder AI</h3>';
+h+='<span class="ab-badge">Describe an agent and AI builds the blueprint</span></div>';
+h+='<div class="ab-form">';
+h+='<textarea id="abDescInput" class="ab-desc-input" placeholder="Describe the agent you want to build...\n\nExample: An agent that creates 30 second video shorts based off recent news. It should research trending topics, generate a script, create images for each scene, then compile them into a short video with captions." rows="4">'+esc(sysState.ab.desc)+'</textarea>';
+
+h+='<div class="ab-config">';
+h+='<div class="ab-config-section">';
+h+='<button class="sys-btn sys-btn-sm" onclick="abToggleToolPicker()">'+ic('wrench',12)+' '+(sysState.ab.showToolPicker?'Hide':'Select')+' Tools '+(Object.keys(sysState.ab.selectedTools).length?'('+Object.keys(sysState.ab.selectedTools).length+')':'')+'</button>';
+h+='<button class="sys-btn sys-btn-sm" onclick="abToggleModelPicker()">'+ic('gear',12)+' '+(sysState.ab.showModelPicker?'Hide':'Assign')+' Models '+(Object.keys(sysState.ab.modelAssignments).length?'('+Object.keys(sysState.ab.modelAssignments).length+')':'')+'</button>';
+h+='</div>';
+h+='<button class="sys-btn sys-btn-primary ab-generate-btn'+(sysState.ab.generating?' disabled':'')+'" onclick="abGenerate()" '+(sysState.ab.generating?'disabled':'')+'>'+
+(sysState.ab.generating?'<div class="spinner-sm"></div> Generating...':ic('zap',14)+' Generate Blueprint')+'</button>';
+h+='</div>';
+
+if(sysState.ab.showToolPicker){
+h+='<div class="ab-tool-picker">';
+h+='<div class="ab-picker-head">Select tools the agent should use (leave empty for AI to decide)</div>';
+h+='<div class="ab-tool-grid">';
+var tools=sysState.availableTools||[];
+var toolCats={};
+for(var ti=0;ti<tools.length;ti++){
+var t=tools[ti];
+var cat='General';
+if(t.name.match(/read_file|search_files|list_dir|glob/))cat='Explore';
+else if(t.name.match(/web_search|x_search|read_url/))cat='Web';
+else if(t.name.match(/edit_file|write_file|undo_edit/))cat='Edit';
+else if(t.name.match(/run_shell|run_tests/))cat='Execute';
+else if(t.name.match(/generate_image|edit_image|generate_video|edit_video|extend_video/))cat='Media';
+else if(t.name.match(/create_tool|modify_tool|delete_tool/))cat='Forge';
+else if(t.name.match(/research_api|setup_api|call_api/))cat='API';
+else if(t.name.match(/vault|memory|todo|note/))cat='Memory';
+else if(t.name.match(/db_query/))cat='Database';
+else if(t.name.match(/save_article|search_article/))cat='Knowledge';
+if(!toolCats[cat])toolCats[cat]=[];
+toolCats[cat].push(t);
+}
+var cats=Object.keys(toolCats).sort();
+for(var ci=0;ci<cats.length;ci++){
+h+='<div class="ab-tool-cat"><div class="ab-tool-cat-head">'+esc(cats[ci])+' <button class="ab-cat-toggle" onclick="abToggleCat(\''+esc(cats[ci])+'\')">all</button></div>';
+for(var tti=0;tti<toolCats[cats[ci]].length;tti++){
+var tool=toolCats[cats[ci]][tti];
+var chk=sysState.ab.selectedTools[tool.name]?'checked':'';
+h+='<label class="ab-tool-item'+(chk?' selected':'')+'"><input type="checkbox" '+chk+' onchange="abToggleTool(\''+esc(tool.name)+'\',this.checked)"> <code>'+esc(tool.name)+'</code></label>';
+}
+h+='</div>';
+}
+h+='</div></div>';
+}
+
+if(sysState.ab.showModelPicker){
+h+='<div class="ab-model-picker">';
+h+='<div class="ab-picker-head">Assign models to processing steps (leave empty for AI to decide)</div>';
+var steps=['reasoning','text_generation','code_analysis','image_generation','video_generation','data_processing','search','custom'];
+var models=sysState.availableModels||[];
+h+='<div class="ab-model-grid">';
+for(var si=0;si<steps.length;si++){
+var step=steps[si];
+var label=step.replace(/_/g,' ').replace(/\b\w/g,function(c){return c.toUpperCase();});
+var assigned=sysState.ab.modelAssignments[step]||'';
+h+='<div class="ab-model-row">';
+h+='<span class="ab-model-label">'+label+'</span>';
+h+='<select class="ab-model-select" onchange="abAssignModel(\''+step+'\',this.value)">';
+h+='<option value="">Auto-detect</option>';
+for(var mi=0;mi<models.length;mi++){
+var m=models[mi];
+var sel=assigned===m.id?' selected':'';
+var badge=m.type==='image_gen'?' [img]':(m.type==='video_gen'?' [vid]':(m.reasoning?' [reason]':''));
+h+='<option value="'+esc(m.id)+'"'+sel+'>'+esc(m.id)+badge+'</option>';
+}
+h+='</select></div>';
+}
+h+='</div></div>';
+}
+
+if(sysState.ab.result){
+var r=sysState.ab.result;
+h+='<div class="ab-result">';
+h+='<div class="ab-result-head"><strong>'+esc(r.name||'Generated Blueprint')+'</strong>';
+h+='<span class="ab-result-desc">'+esc(r.description||'')+'</span></div>';
+if(r.tools&&r.tools.length){
+h+='<div class="ab-result-tools"><span class="ab-result-label">Tools:</span> ';
+for(var rti=0;rti<r.tools.length;rti++){h+='<code class="ab-tool-tag">'+esc(r.tools[rti])+'</code> ';}
+h+='</div>';
+}
+if(r.model_assignments&&Object.keys(r.model_assignments).length){
+h+='<div class="ab-result-models"><span class="ab-result-label">Model Routing:</span>';
+var ma=r.model_assignments;
+for(var mk in ma){h+='<div class="ab-model-tag"><span>'+esc(mk.replace(/_/g,' '))+'</span> '+ic('chevR',10)+' <code>'+esc(ma[mk])+'</code></div>';}
+h+='</div>';
+}
+h+='<div class="ab-result-actions">';
+h+='<button class="sys-btn sys-btn-sm" onclick="abLoadToEditor()">'+ic('edit',12)+' Load to Editor</button>';
+h+='<button class="sys-btn sys-btn-primary sys-btn-sm" onclick="abSaveAsBlueprint()">'+ic('save',12)+' Save as Blueprint</button>';
+h+='<button class="sys-btn sys-btn-primary sys-btn-sm" onclick="abDeployDirect()">'+ic('zap',12)+' Deploy Now</button>';
+h+='</div></div>';
+}
+
+h+='</div></div>';
+
 // Flow builder
 h+='<div class="sys-section">';
 h+='<div class="sys-section-head"><h3>'+ic('zap',16)+' Flow Builder</h3>';
@@ -2965,8 +3215,11 @@ h+='<div class="sys-bp-card-head"><strong>'+esc(bp.name||'Untitled')+'</strong>'
 h+=(bp.is_default?'<span class="sys-bp-badge">Default</span>':'');
 h+='</div>';
 h+='<div class="sys-bp-card-desc">'+esc(bp.description||'No description')+'</div>';
-h+='<div class="sys-bp-card-meta">'+((bp.prompt||'').length?'~'+Math.round(bp.prompt.length/4)+' tokens':'Empty')+' &middot; ';
-h+=(bp.nodes&&bp.nodes.length?bp.nodes.length+' nodes':'No flow')+'</div>';
+var bpMeta=((bp.prompt||'').length?'~'+Math.round(bp.prompt.length/4)+' tokens':'Empty')+' &middot; ';
+bpMeta+=(bp.nodes&&bp.nodes.length?bp.nodes.length+' nodes':'No flow');
+if(bp.tools&&bp.tools.length)bpMeta+=' &middot; '+bp.tools.length+' tools';
+if(bp.model_assignments&&Object.keys(bp.model_assignments).length)bpMeta+=' &middot; '+Object.keys(bp.model_assignments).length+' model routes';
+h+='<div class="sys-bp-card-meta">'+bpMeta+'</div>';
 h+='<div class="sys-bp-card-actions">';
 h+='<button class="sys-btn sys-btn-sm" data-bp-action="load" data-bp-id="'+esc(bp.id)+'" onclick="sysLoadBlueprint(this.dataset.bpId)">'+ic('download',12)+' Load</button>';
 h+='<button class="sys-btn sys-btn-primary sys-btn-sm" data-bp-action="deploy" data-bp-id="'+esc(bp.id)+'" onclick="sysDeployBlueprint(this.dataset.bpId)">'+ic('zap',12)+' Deploy</button>';
@@ -2982,6 +3235,7 @@ function renderFlowBuilder(){
 var h='<div class="sys-fb-nodes">';
 var nodes=sysState.nodes||[];
 var nodeTypes=[{v:'process',l:'Process'},{v:'tool',l:'Tool'},{v:'decision',l:'Decision'},{v:'io',l:'I/O'}];
+var models=sysState.availableModels||[];
 if(!nodes.length){
 h+='<div class="sys-fb-hint">Add nodes to build a visual agent flow. Nodes become steps in the Mermaid diagram.</div>';
 }
@@ -2991,6 +3245,13 @@ h+='<div class="sys-fb-node" data-nidx="'+i+'">';
 h+='<input type="text" class="sys-fb-input" value="'+esc(n.label||'')+'" placeholder="Label" onchange="sysUpdateNode('+i+',\'label\',this.value)">';
 h+='<select class="sys-fb-select" onchange="sysUpdateNode('+i+',\'type\',this.value)">';
 for(var ti=0;ti<nodeTypes.length;ti++){h+='<option value="'+nodeTypes[ti].v+'"'+(n.type===nodeTypes[ti].v?' selected':'')+'>'+nodeTypes[ti].l+'</option>';}
+h+='</select>';
+h+='<select class="sys-fb-select sys-fb-model" onchange="sysUpdateNode('+i+',\'model\',this.value)">';
+h+='<option value="">No model</option>';
+for(var mi=0;mi<models.length;mi++){
+var m=models[mi];
+h+='<option value="'+esc(m.id)+'"'+((n.model||'')===m.id?' selected':'')+'>'+esc(m.id)+'</option>';
+}
 h+='</select>';
 h+='<button class="sys-fb-del" onclick="sysRemoveNode('+i+')">'+ic('xic',12)+'</button>';
 h+='</div>';
@@ -3323,7 +3584,7 @@ var prompt=ta?ta.value:sysState.prompt;
 avaPrompt('Blueprint name:','',function(name){
 if(!name)return;
 avaPrompt('Description (optional):','',function(desc){
-api('/api/system/blueprints',{method:'POST',body:{name:name,description:desc,prompt:prompt,nodes:sysState.nodes,edges:sysState.edges,mermaid_src:sysState.mermaidSrc||''}}).then(function(bp){
+api('/api/system/blueprints',{method:'POST',body:{name:name,description:desc,prompt:prompt,nodes:sysState.nodes,edges:sysState.edges,mermaid_src:sysState.mermaidSrc||'',tools:[],model_assignments:{}}}).then(function(bp){
 sysState.blueprints.unshift(bp);
 var list=document.getElementById('sysBlueprintList');
 if(list){renderSystemInner();}
@@ -3364,6 +3625,109 @@ renderSystemInner();
 toast('Blueprint deleted','info');
 }).catch(function(e){toast('Failed: '+e.message,'error');});
 },{title:'Delete Blueprint'});
+};
+
+/* ── Agent Builder AI ─────────────────────────────────── */
+window.abToggleToolPicker=function(){
+sysState.ab.showToolPicker=!sysState.ab.showToolPicker;
+renderSystemInner();
+};
+window.abToggleModelPicker=function(){
+sysState.ab.showModelPicker=!sysState.ab.showModelPicker;
+renderSystemInner();
+};
+window.abToggleTool=function(name,checked){
+if(checked)sysState.ab.selectedTools[name]=true;
+else delete sysState.ab.selectedTools[name];
+};
+window.abToggleCat=function(cat){
+var tools=sysState.availableTools||[];
+var catTools=tools.filter(function(t){
+var c='General';
+if(t.name.match(/read_file|search_files|list_dir|glob/))c='Explore';
+else if(t.name.match(/web_search|x_search|read_url/))c='Web';
+else if(t.name.match(/edit_file|write_file|undo_edit/))c='Edit';
+else if(t.name.match(/run_shell|run_tests/))c='Execute';
+else if(t.name.match(/generate_image|edit_image|generate_video|edit_video|extend_video/))c='Media';
+else if(t.name.match(/create_tool|modify_tool|delete_tool/))c='Forge';
+else if(t.name.match(/research_api|setup_api|call_api/))c='API';
+else if(t.name.match(/vault|memory|todo|note/))c='Memory';
+else if(t.name.match(/db_query/))c='Database';
+else if(t.name.match(/save_article|search_article/))c='Knowledge';
+return c===cat;
+});
+var allSelected=catTools.every(function(t){return sysState.ab.selectedTools[t.name];});
+catTools.forEach(function(t){
+if(allSelected)delete sysState.ab.selectedTools[t.name];
+else sysState.ab.selectedTools[t.name]=true;
+});
+renderSystemInner();
+};
+window.abAssignModel=function(step,modelId){
+if(modelId)sysState.ab.modelAssignments[step]=modelId;
+else delete sysState.ab.modelAssignments[step];
+};
+window.abGenerate=function(){
+var desc=document.getElementById('abDescInput');
+var description=desc?desc.value.trim():'';
+if(!description){toast('Enter a description of the agent you want to build','error');return;}
+sysState.ab.desc=description;
+sysState.ab.generating=true;
+sysState.ab.result=null;
+renderSystemInner();
+var toolNames=Object.keys(sysState.ab.selectedTools);
+api('/api/system/agent-builder',{method:'POST',body:{
+description:description,
+tools:toolNames.length?toolNames:undefined,
+models:Object.keys(sysState.ab.modelAssignments).length?sysState.ab.modelAssignments:undefined
+}}).then(function(d){
+sysState.ab.generating=false;
+sysState.ab.result=d;
+renderSystemInner();
+toast('Blueprint generated','success');
+}).catch(function(e){
+sysState.ab.generating=false;
+renderSystemInner();
+toast('Generation failed: '+(e.message||'unknown error'),'error');
+});
+};
+window.abLoadToEditor=function(){
+var r=sysState.ab.result;if(!r)return;
+sysState.prompt=r.prompt||'';
+sysState.nodes=r.nodes||[];
+sysState.edges=r.edges||[];
+sysState.mermaidSrc=generateFlowchartFromPrompt(sysState.prompt);
+renderSystemInner();
+toast('Loaded to editor','info');
+};
+window.abSaveAsBlueprint=function(){
+var r=sysState.ab.result;if(!r)return;
+var mmd=generateFlowchartFromPrompt(r.prompt||'');
+api('/api/system/blueprints',{method:'POST',body:{
+name:r.name||'AI-Generated Blueprint',
+description:r.description||'',
+prompt:r.prompt||'',
+nodes:r.nodes||[],
+edges:r.edges||[],
+tools:r.tools||[],
+model_assignments:r.model_assignments||{},
+mermaid_src:mmd
+}}).then(function(bp){
+sysState.blueprints.unshift(bp);
+renderSystemInner();
+toast('Blueprint saved: '+(bp.name||'Untitled'),'success');
+}).catch(function(e){toast('Save failed: '+e.message,'error');});
+};
+window.abDeployDirect=function(){
+var r=sysState.ab.result;if(!r||!r.prompt)return;
+avaConfirm('Deploy this AI-generated blueprint as the active system prompt?',function(){
+api('/api/system/prompt',{method:'POST',body:{prompt:r.prompt}}).then(function(){
+sysState.prompt=r.prompt;
+sysState.mermaidSrc=generateFlowchartFromPrompt(r.prompt);
+renderSystemInner();
+toast('Blueprint deployed as active prompt','success');
+}).catch(function(e){toast('Deploy failed: '+e.message,'error');});
+},{title:'Deploy Blueprint',okText:'Deploy'});
 };
 
 /* ── Settings Page ────────────────────────────────────── */
