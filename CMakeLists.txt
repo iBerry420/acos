@@ -84,6 +84,7 @@ set(SOURCES
   src/config/Config.cpp
   src/config/ModelRegistry.cpp
   src/client/XAIClient.cpp
+  src/client/BatchClient.cpp
   src/client/VultrClient.cpp
   src/client/NodeClient.cpp
   src/infra/VultrDeployUserdata.cpp
@@ -108,6 +109,7 @@ set(SOURCES
   src/server/AppTokens.cpp
   src/server/RoutesServices.cpp
   src/server/RoutesSubAgents.cpp
+  src/server/RoutesBatches.cpp
   src/server/RoutesSystem.cpp
   src/server/LogBuffer.cpp
   src/db/Database.cpp
@@ -117,6 +119,7 @@ set(SOURCES
   src/services/MeshManager.cpp
   src/services/RelayManager.cpp
   src/services/RelayClient.cpp
+  src/services/BatchPoller.cpp
   src/server/RoutesRelay.cpp
   src/session/SessionManager.cpp
   src/tools/ProjectNotes.cpp

@@ -1,3 +1,68 @@
+## [2.3.0] — 2026-04-16
+
+**xAI prompt-cache fixes, cached-token observability, sticky conversation routing, Responses-API chaining + reasoning preservation, and Batch API support (all five phases of `.planning/XAI_CACHE_AND_BATCH_PLAN.md`).**
+
+Cached input tokens bill at ~10× less on `grok-4.20-*` (4× on `grok-4-1-fast`). We were running at effectively 0% hit rate because the agent was re-writing `messages[0]` on every tool turn, requests had no routing hint, and nothing surfaced `cached_tokens` to us. Phase 5 layers xAI's Batch API on top — a flat 50% discount that stacks with caching for a ~20× effective discount on offline/bulk workloads.
+
+### Stop cache-busting the system prefix
+
+- **Split `AgentEngine::buildSystemPrompt`** into `buildStaticSystemPrompt` (cacheable: `GROK_SYSTEM_PROMPT.md` + workspace env) and `buildDynamicContext` (volatile: session TODOs, memory, recent edits, project notes).
+- **`runChatCompletions` / `runResponses` no longer mutate `messages[0]` inside the tool loop.** The static prefix is set once per `run()` entry and the volatile context is injected as a dedicated user-role message immediately before the latest user turn, so new turns append to a byte-stable prefix.
+- **Injected scaffolding is stripped on write-back** — the persisted session no longer accumulates system messages or stale context refreshes.
+
+### Sticky routing via conversation ID
+
+- **`ChatOptions::convId`** field plumbed end-to-end. `XAIClient::chatStream` emits `x-grok-conv-id: <id>` as an HTTP header; `XAIClient::responsesStream` emits `prompt_cache_key: <id>` as a body field. xAI uses these to pin subsequent requests to the same server pool so the KV cache is actually warm on turn N+1.
+- **`SessionData` persists `conv_id`.** Minted once via `SessionManager::generateConvId()` (`"conv-<16hex>"`) and never regenerated — renaming a session doesn't evict the xAI cache. Back-compat: old sessions missing the field get a fresh id on next load.
+- **Application, RoutesChat, and the media-gen path** all mint-if-empty then call `AgentEngine::setConvId()` (and `ToolExecutor::setConvId()` so sub-agent spawns inherit). `AgentEngine` now logs the conv id on each `run()` entry for grep-able correlation with the existing `[cache] prompt=X cached=Y` lines.
+- **Sub-agents inherit the parent routing prefix.** `SubAgentManager::SpawnOptions` gains `parentConvId`; each spawned child computes `childConvId = parent_conv_id + ":" + task_id`. Siblings share the prefix so xAI's router lands them on the same pool, where they reuse each other's cached sub-agent scaffolding. `POST /api/subagents` accepts `parent_conv_id` for programmatic spawns.
+
+### Surface cache hits
+
+- **`Usage` struct** gains `cachedPromptTokens`, `reasoningTokens`, `billablePromptTokens()`, `cacheHitRatio()`.
+- **`XAIClient`** now parses `prompt_tokens_details.cached_tokens` / `input_tokens_details.cached_tokens` from both the chat-completions and Responses APIs, plus `completion_tokens_details.reasoning_tokens`. An `spdlog::info("[cache] prompt=X cached=Y ratio=Z%")` line fires on every response so hit rate is greppable from logs.
+- **`TokenTracker`** gains `addCached`, `addReasoning`, `cachedPromptTokens()`, `reasoningTokens()`, `billablePromptTokens()`, `cacheHitPercent()`, plus a 4-arg `addUsage(prompt, completion, cached, reasoning)` overload. `formatForDisplay` / `formatForDisplayDetailed` render `"(Xk cached, YY%)"` when cached > 0.
+- **Surfaces** — `/api/chat` SSE `usage` + `done` events include `cached_tokens` / `reasoning_tokens` / `billable_prompt_tokens` / `cache_hit_rate`. Headless `--format json` adds the same. Sub-agent `result.usage` carries the full breakdown; `spawn_task`'s top-level `usage` prefers the richer block when present. Persisted usage records (`appendUsageRecord`) now include cached + reasoning so the `/usage` dashboard can attribute savings over time.
+
+### Responses API chaining (`previous_response_id`)
+
+xAI stores the server-side conversation for 30 days when you stream from `/v1/responses`. Passing the stored id back on the next turn lets us send only the new input items (tool results, user follow-ups) — the server replays everything before it, including the encrypted reasoning trace, and the whole chain hits the same cache.
+
+- **`ChatOptions::previousResponseId`** field — emitted as `"previous_response_id"` in the Responses API body when non-empty. Unused by the chat-completions path.
+- **`StreamCallbacks::onResponseId`** — new callback; `XAIClient::responsesStream` parses `response.id` out of `response.completed` / `response.done` SSE frames and fires it exactly once per successful stream.
+- **`AgentEngine` chain bookkeeping** — new `lastResponseId_` + `lastSubmittedCount_` state, persisted across `run()` calls. `runResponses` now:
+  - Slices `apiMessages` to the tail past `lastSubmittedCount_` when chaining, so the server only sees new turns.
+  - Skips `instructions` on chained calls (server already has the cached prefix).
+  - Injects the dynamic-context refresh **inside** the slice so xAI actually sees the latest TODO / memory / edits.
+  - Updates `lastResponseId_` and the slice base after every successful stream.
+  - Detects stale-id errors (`previous_response_id` rejected / expired / not found) and transparently falls back to a full-history resend for the rest of the run, then resumes chaining from the next response.
+  - Clears chain state on `MAX_TOOL_TURNS` so the next `run()` re-syncs from scratch rather than continuing from a torn chain.
+- **`SessionData` persists `last_response_id` + `last_submitted_count`.** Wired through `Application::saveSession` / `loadSession` (headless) and `RoutesChat` (web). Clearing history (`use_history:false`) resets both so we don't chain into a mismatched server state.
+- **Panic switch** — `AgentEngine::setUsePreviousResponseId(false)` disables chaining entirely. Default on.
+
+### Reasoning content preservation (chat completions)
+
+Reasoning models on the chat-completions path (`grok-4-reasoning`, `grok-4-fast-reasoning`) stream `reasoning_content` deltas. We previously inlined them into assistant `content` as `<thought>…</thought>`, which broke xAI's reasoning cache on replay because the round-tripped messages no longer matched the originally-cached ones.
+
+- **`Message::reasoning_content`** — new field, persisted per assistant turn.
+- **`StreamCallbacks::onReasoning`** — new callback. When set, `XAIClient::chatStream` / `responsesStream` route raw `reasoning_content` deltas there instead of inlining them via `onContent`. Callers without `onReasoning` still get the legacy `<thought>` wrapping for UI back-compat.
+- **`AgentEngine::runChatCompletions`** now captures raw reasoning into the assistant `Message`, then re-emits `<thought>…</thought>` to `onStreamDelta_` for the web/TUI transcript splitters — the on-wire message the next turn sends back to xAI is byte-identical to what the model produced, so the reasoning cache stays warm.
+- **`XAIClient::buildRequestBody`** echoes `reasoning_content` back on assistant turns (both plain and with tool_calls). Non-reasoning models ignore the field.
+- **`SessionManager`** persists `reasoning_content` on each message, round-tripping it across save/load.
+
+### Batch API (`/v1/messages/batches`)
+
+xAI's Batch API returns a flat 50% discount on every token (input, cached, output, reasoning) and gives the service 24 hours to complete the work. Stacks multiplicatively with prompt caching — cached input on a batched request bills at 50% × ~10% = ~5% of the sticker price.
+
+- **`BatchClient` (`src/client/BatchClient.{hpp,cpp}`)** — thin C++ wrapper over `/v1/messages/batches`. Methods: `create(name)`, `addRequests(batchId, envelopes)`, `get(batchId)`, `listResults(batchId, limit, pageToken)`, `cancel(batchId)`, `list(limit, pageToken)`. Static builders `makeChatRequest(id, body)` and `makeResponsesRequest(id, body)` produce the `{custom_id, params: {endpoint, body}}` envelopes xAI expects. Token/cost accounting is extracted into `BatchResult::{promptTokens, completionTokens, cachedTokens, reasoningTokens, costUsdTicks}` so Batch usage can be rolled into the existing `TokenTracker` / `/usage` dashboard.
+- **SQLite migration v7** — `batches` table with `(id PRIMARY KEY, name, owner, kind, state, num_requests, num_pending, num_success, num_error, num_cancelled, cost_usd_ticks, expires_at, created_at, updated_at, last_polled, request_ids_json, results_json, metadata)` plus indexes on `state`, `owner`, `created_at`. `cost_usd_ticks` stores 10⁻¹⁰ USD to keep arithmetic in `int64_t` without float drift.
+- **`BatchPoller` background thread (`src/services/BatchPoller.{hpp,cpp}`)** — singleton service started by `HttpServer::start()`. Sleeps on a condition variable, wakes every `xai.batch.poll_interval_sec` (default 30s) or when any code path calls `BatchPoller::pollNow()`. On each tick it selects `state = 'processing'` rows, calls `BatchClient::get` per batch, updates the local row, and — once terminal — fetches the full results page and snapshots it to `results_json` so the UI/tools can serve results without a round-trip to xAI. Exponential backoff on transient xAI errors, bounded by `max_consecutive_failures` before the poller pauses the offending batch.
+- **HTTP routes (`src/server/RoutesBatches.cpp`)** — `POST /api/batches` creates a batch (accepts either `{requests:[…]}` to pre-populate or returns the id for a later `POST /api/batches/:id/requests`), `GET /api/batches` lists with `owner` / `kind` / `state` filters, `GET /api/batches/:id` returns the merged local+live snapshot, `GET /api/batches/:id/results?limit=&page_token=` serves paginated results (cache-first, falls through to xAI when the cache is empty), `POST /api/batches/:id/cancel`, `POST /api/batches/:id/refresh` forces a single-batch poll, `POST /api/batches/refresh` kicks the poller, `DELETE /api/batches/:id` removes the local record (does not call xAI). All JWT-guarded and owner-scoped.
+- **Agent-facing tools (`ToolRegistry` + `ToolExecutor`)** — five new tools the agent can invoke directly: `batch_submit(name, kind, model, prompts[])`, `get_batch(batch_id)`, `list_batches(owner?, kind?, state?, limit?)`, `get_batch_results(batch_id, limit?, pagination_token?)`, `cancel_batch(batch_id)`. `batch_submit` accepts the friendly `{system, user, model, max_tokens}` shape per prompt (or raw `messages[]`) and translates into xAI envelopes on the way out, persists a local row, and kicks the poller so state flips from `processing` → `completed` without the agent having to poll. `batch_submit` is gated to tool-mode ≥ 2 (writes) to keep casual read-only sessions from accidentally queuing paid jobs.
+- **Sub-agent plumbing** — `ToolExecutor::convId_` is threaded into sub-agent spawns so a batch created by a sub-agent inherits the parent's routing prefix (`conv-<hex>:<task_id>`); cached batch prefixes land on the same xAI pool as the parent's interactive turns.
+
+---
+
 ## [2.2.0] — 2026-04-16
 
 **Platform capabilities: long-running services, per-app SQLite, and scoped sub-agents. Four phases, one release.**

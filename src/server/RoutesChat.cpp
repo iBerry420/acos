@@ -203,6 +203,10 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
                 SessionData sessionData;
                 if (!sessionName.empty() && sessionMgr.exists(sessionName))
                     sessionMgr.load(sessionName, sessionData);
+                // Preserve the cache-routing key even on the media path so a later
+                // chat-model turn on the same session keeps hitting the warm cache.
+                if (sessionData.convId.empty())
+                    sessionData.convId = SessionManager::generateConvId();
                 sessionData.messages.push_back({"user", message});
 
                 nlohmann::json toolArgs;
@@ -355,11 +359,20 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
             if (!sessionName.empty() && sessionMgr->exists(sessionName))
                 sessionMgr->load(sessionName, *sessionData);
 
+            // Stable xAI cache routing key. Minted once per session and persisted
+            // on the next save so turn N+1 lands on the same xAI server pool.
+            if (sessionData->convId.empty()) {
+                sessionData->convId = SessionManager::generateConvId();
+                spdlog::info("[Chat] Minted conv_id {} for session '{}'",
+                             sessionData->convId, sessionName);
+            }
+
             pushEvent({{"type", "session_init"}, {"session", sessionName}});
 
             auto toolExecutor = std::make_unique<ToolExecutor>(workspace, mode, nullptr);
             toolExecutor->setSessionId(sessionName);
             toolExecutor->setSearchModel(model);
+            toolExecutor->setConvId(sessionData->convId);
 
             toolExecutor->setAskUser([pushEvent, cancelFlag](const std::string& question) -> std::string {
                 pushEvent({{"type", "ask_user"}, {"question", question}});
@@ -479,6 +492,9 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
 
             if (!useHistory) {
                 sessionData->messages.clear();
+                // Fresh conversation = no server-side history to chain to.
+                sessionData->lastResponseId.clear();
+                sessionData->lastSubmittedCount = 0;
             }
 
             {
@@ -533,12 +549,17 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
             TokenTracker tracker;
             auto onUsage = [pushEvent, &tracker, promptCounter, completionCounter, &model,
                             &sessionName](const Usage& u) {
-                tracker.addUsage(u.promptTokens, u.completionTokens);
+                tracker.addUsage(u.promptTokens, u.completionTokens,
+                                 u.cachedPromptTokens, u.reasoningTokens);
                 promptCounter->fetch_add(u.promptTokens);
                 completionCounter->fetch_add(u.completionTokens);
                 pushEvent({{"type", "usage"},
                            {"prompt_tokens", u.promptTokens},
                            {"completion_tokens", u.completionTokens},
+                           {"cached_tokens", u.cachedPromptTokens},
+                           {"reasoning_tokens", u.reasoningTokens},
+                           {"billable_prompt_tokens", u.billablePromptTokens()},
+                           {"cache_hit_rate", u.cacheHitRatio()},
                            {"billing", "xai_direct"}});
 
                 auto now = std::chrono::duration_cast<std::chrono::seconds>(
@@ -549,6 +570,8 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
                 record["session"] = sessionName;
                 record["prompt_tokens"] = u.promptTokens;
                 record["completion_tokens"] = u.completionTokens;
+                record["cached_tokens"] = u.cachedPromptTokens;
+                record["reasoning_tokens"] = u.reasoningTokens;
                 record["billing"] = "xai_direct";
                 try { appendUsageRecord(record); } catch (...) {}
             };
@@ -556,8 +579,18 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
             engine->setCancelFlag(cancelFlag);
             if (maxTokensOverride > 0) engine->setMaxTokensOverride(maxTokensOverride);
             if (!reasoningEffort.empty()) engine->setReasoningEffort(reasoningEffort);
+            engine->setConvId(sessionData->convId);
+            // Seed Responses API chain state so chaining persists across separate
+            // HTTP calls within the same session.
+            engine->setLastResponseId(sessionData->lastResponseId);
+            engine->setLastSubmittedCount(sessionData->lastSubmittedCount);
 
             bool ok = engine->run(client, model, sessionData->messages, tools, onUsage);
+
+            // Snapshot the chain state the engine updated during the run so we
+            // can round-trip it on the next call.
+            sessionData->lastResponseId = engine->lastResponseId();
+            sessionData->lastSubmittedCount = engine->lastSubmittedCount();
 
             if (ts->inThought && !ts->buffer.empty()) {
                 pushEvent({{"type", "thinking_delta"}, {"content", ts->buffer}});
@@ -587,7 +620,10 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
                         {"cancelled", cancelFlag->load()},
                         {"session", sessionName},
                         {"prompt_tokens", tracker.promptTokens()},
-                        {"completion_tokens", tracker.completionTokens()}});
+                        {"completion_tokens", tracker.completionTokens()},
+                        {"cached_tokens", tracker.cachedPromptTokens()},
+                        {"reasoning_tokens", tracker.reasoningTokens()},
+                        {"cache_hit_percent", tracker.cacheHitPercent()}});
 
             busyFlag2->store(false);
             std::lock_guard<std::mutex> lock(eq->mu);

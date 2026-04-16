@@ -292,10 +292,20 @@ AgentEngine::AgentEngine(std::string workspace,
     , onModeChange_(std::move(onModeChange)) {}
 
 std::string AgentEngine::buildSystemPrompt(Mode /*mode*/, const std::string& workspace) {
-    std::string sessionId = executor_ ? executor_->sessionId() : "";
-    std::string prompt = buildUnifiedPrompt(workspace);
-    prompt += loadContextSnapshot(workspace, sessionId);
+    std::string prompt = buildStaticSystemPrompt(workspace);
+    std::string dyn = buildDynamicContext(workspace);
+    if (!dyn.empty())
+        prompt += dyn;
     return prompt;
+}
+
+std::string AgentEngine::buildStaticSystemPrompt(const std::string& workspace) {
+    return buildUnifiedPrompt(workspace);
+}
+
+std::string AgentEngine::buildDynamicContext(const std::string& workspace) {
+    std::string sessionId = executor_ ? executor_->sessionId() : "";
+    return loadContextSnapshot(workspace, sessionId);
 }
 
 bool AgentEngine::run(XAIClient& client,
@@ -316,13 +326,41 @@ bool AgentEngine::runChatCompletions(XAIClient& client,
                                      std::vector<Message>& messagesInOut,
                                      const std::vector<nlohmann::json>& tools,
                                      UsageFn onUsage) {
-    std::vector<Message> apiMessages = messagesInOut;
+    // Build apiMessages = [static system prompt] [prior turns] [dynamic ctx refresh] [latest user turn]
+    // The static system prompt is set once and NEVER rewritten inside the tool loop so the xAI
+    // prompt cache can serve the prefix on every turn. Volatile session state (TODOs, memory,
+    // recent edits) is injected as a separate user message right before the latest user turn —
+    // new each run(), but only at the end so earlier turns stay byte-stable and remain cached.
+    std::vector<Message> apiMessages;
+    apiMessages.reserve(messagesInOut.size() + 2);
 
-    if (apiMessages.empty() || apiMessages.front().role != "system") {
-        apiMessages.insert(apiMessages.begin(),
-            {"system", buildSystemPrompt(mode_, workspace_)});
-    } else {
-        apiMessages[0].content = buildSystemPrompt(mode_, workspace_);
+    apiMessages.push_back({"system", buildStaticSystemPrompt(workspace_)});
+
+    // Carry over prior non-system messages from the session. Any stale system message in
+    // messagesInOut is dropped — the fresh static prompt above is authoritative.
+    size_t tailUserIdx = std::string::npos;
+    for (const auto& m : messagesInOut) {
+        if (m.role == "system") continue;
+        apiMessages.push_back(m);
+    }
+    for (size_t i = apiMessages.size(); i > 1; --i) {
+        if (apiMessages[i - 1].role == "user") {
+            tailUserIdx = i - 1;
+            break;
+        }
+    }
+
+    std::string dynCtx = buildDynamicContext(workspace_);
+    bool dynCtxInjected = false;
+    size_t dynCtxIdx = 0;
+    if (!dynCtx.empty()) {
+        Message ctxMsg{"user",
+            "## Current Session State (refreshed at the start of each run)\n" + dynCtx};
+        size_t insertPos = (tailUserIdx != std::string::npos) ? tailUserIdx : apiMessages.size();
+        apiMessages.insert(apiMessages.begin() + static_cast<std::ptrdiff_t>(insertPos),
+                           std::move(ctxMsg));
+        dynCtxIdx = insertPos;
+        dynCtxInjected = true;
     }
 
     ChatOptions opts;
@@ -332,6 +370,7 @@ bool AgentEngine::runChatCompletions(XAIClient& client,
     if (maxTokensOverride_ > 0) opts.maxTokens = maxTokensOverride_;
     opts.stream = true;
     opts.cancelFlag = cancelFlag_;
+    opts.convId = convId_;
 
     size_t estChars = 0;
     for (const auto& m : apiMessages) {
@@ -350,12 +389,16 @@ bool AgentEngine::runChatCompletions(XAIClient& client,
         apiMessages.push_back(warnMsg);
     }
 
+    spdlog::info("[AgentEngine] Chat completions run (model={}, conv_id={})",
+                 model, opts.convId.empty() ? "<none>" : opts.convId);
+
     int turn = 0;
     while (turn < MAX_TOOL_TURNS) {
         ++turn;
         spdlog::info("[AgentEngine] Turn {}", turn);
 
         std::string fullResponse;
+        std::string reasoningBuf;
         std::vector<ToolCall> toolCalls;
 
         auto collectToolCalls = [&](const std::vector<ToolCall>& calls) {
@@ -371,7 +414,20 @@ bool AgentEngine::runChatCompletions(XAIClient& client,
             .onUsage = [&](const Usage& u) {
                 if (onUsage) onUsage(u);
             },
-            .onDone = [] {}
+            .onDone = [] {},
+            // Capture reasoning_content raw so we can echo it back on the next
+            // turn (keeps xAI's reasoning-cache warm) without burying it in the
+            // assistant `content` as the legacy <thought> wrapping did.
+            .onReasoning = [&](const std::string& delta) {
+                reasoningBuf += delta;
+                if (onStreamDelta_) {
+                    // Preserve the UI-visible thought stream the web/TUI already
+                    // expects: they split on <thought>…</thought>.
+                    if (reasoningBuf.size() == delta.size())
+                        onStreamDelta_("<thought>");
+                    onStreamDelta_(delta);
+                }
+            }
         });
 
         if (!ok) {
@@ -379,8 +435,13 @@ bool AgentEngine::runChatCompletions(XAIClient& client,
             return false;
         }
 
+        // Close the thought block for the UI if we actually streamed reasoning.
+        if (!reasoningBuf.empty() && onStreamDelta_)
+            onStreamDelta_("</thought>");
+
         Message assistantMsg{"assistant", fullResponse};
         assistantMsg.tool_calls = toolCalls;
+        assistantMsg.reasoning_content = std::move(reasoningBuf);
         apiMessages.push_back(std::move(assistantMsg));
 
         if (toolCalls.empty()) {
@@ -422,6 +483,16 @@ bool AgentEngine::runChatCompletions(XAIClient& client,
     if (turn >= MAX_TOOL_TURNS)
         spdlog::warn("[AgentEngine] Reached max tool turns");
 
+    // Strip our injections before handing the transcript back to the caller so they don't
+    // accumulate in the persisted session: the system prompt is always re-generated at the
+    // next run() entry, and the dynamic-context block is re-freshed from live state.
+    if (dynCtxInjected && dynCtxIdx < apiMessages.size()) {
+        apiMessages.erase(apiMessages.begin() + static_cast<std::ptrdiff_t>(dynCtxIdx));
+    }
+    if (!apiMessages.empty() && apiMessages.front().role == "system") {
+        apiMessages.erase(apiMessages.begin());
+    }
+
     messagesInOut = std::move(apiMessages);
     return true;
 }
@@ -431,11 +502,53 @@ bool AgentEngine::runResponses(XAIClient& client,
                                std::vector<Message>& messagesInOut,
                                const std::vector<nlohmann::json>& tools,
                                UsageFn onUsage) {
-    std::vector<Message> apiMessages = messagesInOut;
+    std::vector<Message> apiMessages;
+    apiMessages.reserve(messagesInOut.size() + 1);
+    for (const auto& m : messagesInOut) {
+        if (m.role == "system") continue;  // drop any stale system message
+        apiMessages.push_back(m);
+    }
 
     bool isMultiAgent = model.find("multi-agent") != std::string::npos;
 
-    std::string systemPrompt = buildSystemPrompt(mode_, workspace_);
+    // `instructions` carries only the cacheable static prefix; volatile context goes inline
+    // as a user message so the prefix + all preceding turns stay byte-stable across turns.
+    std::string systemPrompt = buildStaticSystemPrompt(workspace_);
+
+    // Phase 4a: chain via `previous_response_id` when we've seen one. In that mode we only
+    // send the slice of messages appended since the last server response — xAI replays the
+    // stored history (including encrypted reasoning) for us. Falls back to full resend if
+    // the stored response has expired (>30 d) or the id is otherwise rejected.
+    size_t baseCount = 0;
+    std::string currentPrevId;
+    if (usePreviousResponseId_ && !lastResponseId_.empty() && !isMultiAgent) {
+        baseCount = std::min(lastSubmittedCount_, apiMessages.size());
+        currentPrevId = lastResponseId_;
+        spdlog::info("[AgentEngine] Responses chain: prev_id={} slice_from={}/{} msgs",
+                     currentPrevId, baseCount, apiMessages.size());
+    }
+
+    std::string dynCtx = buildDynamicContext(workspace_);
+    bool dynCtxInjected = false;
+    size_t dynCtxIdx = 0;
+    if (!dynCtx.empty()) {
+        size_t insertPos = apiMessages.size();
+        for (size_t i = apiMessages.size(); i > 0; --i) {
+            if (apiMessages[i - 1].role == "user") {
+                insertPos = i - 1;
+                break;
+            }
+        }
+        // Keep the refresh inside the slice that actually goes to the server, otherwise
+        // xAI never sees it when we're chaining via previous_response_id.
+        if (insertPos < baseCount) insertPos = baseCount;
+        Message ctxMsg{"user",
+            "## Current Session State (refreshed at the start of each run)\n" + dynCtx};
+        apiMessages.insert(apiMessages.begin() + static_cast<std::ptrdiff_t>(insertPos),
+                           std::move(ctxMsg));
+        dynCtxIdx = insertPos;
+        dynCtxInjected = true;
+    }
 
     std::vector<nlohmann::json> responsesTools;
     if (isMultiAgent) {
@@ -456,29 +569,61 @@ bool AgentEngine::runResponses(XAIClient& client,
     }
     opts.stream = true;
     opts.cancelFlag = cancelFlag_;
+    opts.convId = convId_;
     if (!reasoningEffort_.empty())
         opts.reasoningEffort = reasoningEffort_;
     else if (opts.reasoningEffort.empty())
         opts.reasoningEffort = "high";
 
-    spdlog::info("[AgentEngine] Using Responses API for model '{}' (effort={}, multi_agent={})",
-                 model, opts.reasoningEffort, isMultiAgent);
+    spdlog::info("[AgentEngine] Using Responses API for model '{}' (effort={}, multi_agent={}, conv_id={}, prev_id={})",
+                 model, opts.reasoningEffort, isMultiAgent,
+                 opts.convId.empty() ? "<none>" : opts.convId,
+                 currentPrevId.empty() ? "<none>" : currentPrevId);
 
+    auto isStalePrevIdError = [](const std::string& err) {
+        std::string lower;
+        lower.reserve(err.size());
+        for (char c : err) lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (lower.find("previous_response_id") != std::string::npos) return true;
+        if (lower.find("previous response") != std::string::npos) return true;
+        return lower.find("response") != std::string::npos &&
+               (lower.find("not found") != std::string::npos ||
+                lower.find("expired") != std::string::npos ||
+                lower.find("invalid") != std::string::npos);
+    };
+
+    bool prevIdFallbackUsed = false;
     int turn = 0;
     while (turn < MAX_TOOL_TURNS) {
         ++turn;
-        spdlog::info("[AgentEngine] Responses turn {}", turn);
+        spdlog::info("[AgentEngine] Responses turn {} (slice {} → {})",
+                     turn, baseCount, apiMessages.size());
 
-        auto input = messagesToResponsesInput(apiMessages);
+        // Slice only the items the server hasn't seen yet. On the first call of a fresh
+        // chain baseCount==0 → full input; on chained calls baseCount points past the
+        // last assistant, so the slice is [new tool results | new user msg | dynCtx].
+        std::vector<Message> slice;
+        slice.reserve(apiMessages.size() - baseCount);
+        for (size_t i = baseCount; i < apiMessages.size(); ++i)
+            slice.push_back(apiMessages[i]);
+        auto input = messagesToResponsesInput(slice);
+
+        // When chaining, skip `instructions`: the server already has them cached from the
+        // original turn. Sending fresh instructions on chained calls would either be
+        // ignored or trigger a re-encode.
+        const std::string& turnInstructions = currentPrevId.empty() ? systemPrompt : std::string();
+        opts.previousResponseId = currentPrevId;
 
         std::string fullResponse;
+        std::string reasoningBuf;
+        std::string newResponseId;
         std::vector<ToolCall> toolCalls;
 
         auto collectToolCalls = [&](const std::vector<ToolCall>& calls) {
             toolCalls = calls;
         };
 
-        bool ok = client.responsesStream(systemPrompt, input, opts, responsesTools, {
+        bool ok = client.responsesStream(turnInstructions, input, opts, responsesTools, {
             .onContent = [&](const std::string& delta) {
                 fullResponse += delta;
                 if (onStreamDelta_) onStreamDelta_(delta);
@@ -487,17 +632,54 @@ bool AgentEngine::runResponses(XAIClient& client,
             .onUsage = [&](const Usage& u) {
                 if (onUsage) onUsage(u);
             },
-            .onDone = [] {}
+            .onDone = [] {},
+            .onReasoning = [&](const std::string& delta) {
+                reasoningBuf += delta;
+                if (onStreamDelta_) {
+                    if (reasoningBuf.size() == delta.size())
+                        onStreamDelta_("<thought>");
+                    onStreamDelta_(delta);
+                }
+            },
+            .onResponseId = [&](const std::string& id) {
+                newResponseId = id;
+            }
         });
 
         if (!ok) {
-            spdlog::error("[AgentEngine] Responses API failed: {}", client.lastError());
+            std::string err = client.lastError();
+            if (!currentPrevId.empty() && !prevIdFallbackUsed && isStalePrevIdError(err)) {
+                spdlog::warn("[AgentEngine] previous_response_id rejected ({}), falling back "
+                             "to full-history resend for this run", err);
+                prevIdFallbackUsed = true;
+                currentPrevId.clear();
+                lastResponseId_.clear();
+                baseCount = 0;
+                lastSubmittedCount_ = 0;
+                --turn;  // replay this iteration from scratch
+                continue;
+            }
+            spdlog::error("[AgentEngine] Responses API failed: {}", err);
             return false;
+        }
+
+        // Close the UI thought block for streamed reasoning.
+        if (!reasoningBuf.empty() && onStreamDelta_)
+            onStreamDelta_("</thought>");
+
+        if (!newResponseId.empty()) {
+            currentPrevId = newResponseId;
+            lastResponseId_ = newResponseId;
         }
 
         Message assistantMsg{"assistant", fullResponse};
         assistantMsg.tool_calls = toolCalls;
+        assistantMsg.reasoning_content = std::move(reasoningBuf);
         apiMessages.push_back(std::move(assistantMsg));
+
+        // Server now has everything through this response's output. Anything we append
+        // from here on (tool results) is "new input" for the next turn.
+        baseCount = apiMessages.size();
 
         if (toolCalls.empty()) {
             spdlog::info("[AgentEngine] No tool calls - done");
@@ -534,8 +716,26 @@ bool AgentEngine::runResponses(XAIClient& client,
         }
     }
 
-    if (turn >= MAX_TOOL_TURNS)
-        spdlog::warn("[AgentEngine] Reached max tool turns (Responses)");
+    if (turn >= MAX_TOOL_TURNS) {
+        spdlog::warn("[AgentEngine] Reached max tool turns (Responses) — clearing chain state");
+        // There are un-submitted tool messages after baseCount that the server never saw.
+        // Next run() will do a full resend to re-sync rather than continue from a torn chain.
+        lastResponseId_.clear();
+        lastSubmittedCount_ = 0;
+    } else {
+        // baseCount tracked non-persisted indices (with the injected dynCtx counted in).
+        // After we erase dynCtx, indices before it are unchanged but indices after it
+        // shift down by one — adjust the persisted submitted count accordingly.
+        size_t persistedCount = baseCount;
+        if (dynCtxInjected && baseCount > dynCtxIdx && persistedCount > 0)
+            persistedCount -= 1;
+        lastSubmittedCount_ = persistedCount;
+    }
+
+    // Strip the injected dynamic-context refresh so it is re-built from live state next run().
+    if (dynCtxInjected && dynCtxIdx < apiMessages.size()) {
+        apiMessages.erase(apiMessages.begin() + static_cast<std::ptrdiff_t>(dynCtxIdx));
+    }
 
     messagesInOut = std::move(apiMessages);
     return true;

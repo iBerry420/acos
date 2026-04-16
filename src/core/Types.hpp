@@ -72,6 +72,13 @@ struct Message {
     std::optional<std::string> tool_call_id;
     std::vector<ToolCall> tool_calls;
     std::vector<ContentPart> content_parts;
+    /// Raw `reasoning_content` from xAI reasoning models (assistant turns only).
+    /// Captured separately from `content` so it can be echoed back verbatim on
+    /// the next turn, keeping xAI's reasoning-cache warm without polluting the
+    /// user-visible transcript with chain-of-thought. Empty for non-reasoning
+    /// models and for user/tool turns. Non-reasoning models ignore the field
+    /// when it's round-tripped in a request body.
+    std::string reasoning_content;
 };
 
 // Stub: serialize ToolCall result to JSON for API. Expanded in tool execution phase.
@@ -82,7 +89,24 @@ inline std::string toolCallToJson(const ToolCall& tc) {
 struct Usage {
     size_t promptTokens = 0;
     size_t completionTokens = 0;
+    /// Subset of promptTokens that were served from the xAI prompt cache. Cached tokens
+    /// bill at ~10x lower input rate on grok-4.20-* models (4x on grok-4-1-fast).
+    /// Parsed from usage.prompt_tokens_details.cached_tokens (chat completions) or
+    /// usage.input_tokens_details.cached_tokens (Responses API).
+    size_t cachedPromptTokens = 0;
+    /// Reasoning tokens for grok-4.20-*-reasoning models. Already summed into
+    /// completionTokens above; kept separately so we can bill / display accurately.
+    size_t reasoningTokens = 0;
+
     size_t totalTokens() const { return promptTokens + completionTokens; }
+    size_t billablePromptTokens() const {
+        return promptTokens > cachedPromptTokens ? promptTokens - cachedPromptTokens : 0;
+    }
+    double cacheHitRatio() const {
+        return promptTokens > 0
+            ? static_cast<double>(cachedPromptTokens) / static_cast<double>(promptTokens)
+            : 0.0;
+    }
 };
 
 struct TodoItem {

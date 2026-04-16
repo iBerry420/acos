@@ -21,5 +21,6 @@ void registerServiceRoutes(httplib::Server& svr, ServerContext ctx);
 void registerSystemRoutes(httplib::Server& svr, ServerContext ctx);
 void registerRelayRoutes(httplib::Server& svr, ServerContext ctx);
 void registerSubAgentRoutes(httplib::Server& svr, ServerContext ctx);
+void registerBatchRoutes(httplib::Server& svr, ServerContext ctx);
 
 } // namespace avacli

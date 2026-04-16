@@ -39,6 +39,12 @@ public:
         std::string parentTaskId;   // "" for top-level
         int parentDepth = 0;         // 0 for root chat; child depth = parent+1
         std::string sessionId;
+        /// xAI cache-routing key of the spawning parent. Child conv_id is
+        /// composed as `parentConvId + ":" + taskId` so sibling sub-agents
+        /// share the parent's routing prefix and reuse each other's cached
+        /// sub-agent scaffolding on the xAI side. Empty = child mints a
+        /// stand-alone conv_id.
+        std::string parentConvId;
         std::string model;           // defaults to config->model
         int maxTurns = 12;           // cap tool loop per task (cheap safety)
     };

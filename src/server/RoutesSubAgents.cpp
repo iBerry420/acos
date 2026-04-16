@@ -89,6 +89,7 @@ void registerSubAgentRoutes(httplib::Server& svr, ServerContext /*ctx*/) {
         opts.parentTaskId = body.value("parent_task_id", "");
         opts.parentDepth = body.value("parent_depth", 0);
         opts.sessionId = body.value("session_id", "");
+        opts.parentConvId = body.value("parent_conv_id", "");
         opts.model = body.value("model", "");
         if (body.contains("allowed_paths") && body["allowed_paths"].is_array()) {
             for (const auto& p : body["allowed_paths"])
