@@ -79,6 +79,7 @@ Registered in **`ToolRegistry::registerAll`**:
 | Apps | `create_app`, `edit_app_file`, `list_apps`, `app_token`, `app_db_execute`, `app_db_set_cap` |
 | Services | `create_service`, `manage_service`, `delete_service`, `list_services`, `tail_service_logs` |
 | Sub-agents | `spawn_subagent`, `wait_subagent`, `cancel_subagent`, `list_subagents` |
+| Batch API (v2.3) | `batch_submit`, `get_batch`, `list_batches`, `get_batch_results`, `cancel_batch` |
 
 Which tools are exposed depends on **mode** (`getToolsForMode`).
 
@@ -106,6 +107,21 @@ window.avacli.main.query(viewName, p)   // whitelisted main DB views only
 Endpoints auth with the per-app `agent_token` (bearer + same-origin referer). A whitelist of views (`articles_public`, `apps_directory`, `my_app`) is the only path into the main DB — apps never run raw SQL there.
 
 **Sub-agents** — `spawn_subagent` starts a child `AgentEngine` on its own thread with a `ScopedToolExecutor` that enforces `allowed_paths` (glob match) and `allowed_tools` (whitelist). Write leases in `agent_leases` serialize sibling writes to the same path; the second writer gets `{"error":"resource_locked","holder":"<task_id>"}` and is expected to `wait_subagent(holder)`. All sub-agents use `XAIClient` — no OpenAI / Anthropic / Ollama. Tasks are visible at `GET /api/tasks`, with SSE event streams at `GET /api/tasks/:id/events/stream`.
+
+### Cost optimization (v2.3 — prompt cache + Batch API)
+
+xAI's prompt cache rewards **byte-stable prefixes**; repeated system messages that differ by a timestamp or a per-run UUID get 0% cache hits. v2.3 re-engineers the request builder around that constraint and adds a Batch API surface for workloads that don't need a live SSE stream.
+
+| Feature | Effect | Where |
+|---|---|---|
+| **Byte-stable system prefix** | Dynamic context (`GROK_NOTES.md`, todos, memory, edit history) is split out as a separate `system` message *after* the stable prompt, so the prefix is identical across turns and users. | `AgentEngine::runChatCompletions`, `runResponses` |
+| **Sticky `conv_id` routing** | `X-Xai-Conv-Id` header on chat-completions + `conv_id` body field on the Responses API pin cache routing to the same server shard for the life of a conversation. Inherited by sub-agents so tool-heavy sessions stay warm. | `XAIClient::buildRequestBody`, `SessionManager` |
+| **Cache-hit telemetry** | Every response logs `[cache] prompt=X cached=Y ratio=Z%`. `cached_tokens`, `reasoning_tokens`, `billable_prompt_tokens`, and `cache_hit_rate` are surfaced on SSE `token_usage` frames, the headless `--format json` summary, the sub-agent `usage` event, and the `/usage` dashboard. | end-to-end |
+| **`previous_response_id` chaining** | Responses API turns send only new items (tool results, next user message) + `previous_response_id` — the server reconstructs history from its 30-day retention. Transparent full-resend fallback on stale-ID errors. | `XAIClient::responsesStream`, `AgentEngine::runResponses` |
+| **Reasoning preservation** | Chat-completions reasoning models stream `reasoning_content` through a dedicated callback; it's stored per-message and echoed byte-identically on replay so reasoning stays inside the cached prefix. | `Message::reasoning_content`, `SessionManager` |
+| **Batch API** | Flat **50% discount** on `/v1/messages/batches`, stacks with prompt caching for **~20× effective discount** on offline workloads. New `batches` table (migration v7), background `BatchPoller` reconciles state every 30s, full REST surface `/api/batches/*` + five agent tools. | `BatchClient`, `BatchPoller`, `RoutesBatches` |
+
+Typical session goes from **~0% cache hits** (pre-v2.3, broken by per-run UUIDs in the system prompt) to **70–90% from turn 2 onward** — a 5–10× cost drop on interactive chat, plus another 2× on top for anything batched.
 
 ### Agent reliability features
 
@@ -283,8 +299,8 @@ If you ship a binary next to **`install.sh`**, that script can install to `/usr/
 ## Packaging (maintainers)
 
 ```bash
-./packaging/build-all.sh 2.2.0
-./packaging/build-deb.sh 2.2.0 amd64 build/avacli ./dist
+./packaging/build-all.sh 2.3.0
+./packaging/build-deb.sh 2.3.0 amd64 build/avacli ./dist
 ```
 
 See **`packaging/`** for distribution notes.
