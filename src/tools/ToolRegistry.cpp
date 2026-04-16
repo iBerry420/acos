@@ -38,7 +38,12 @@ const std::unordered_map<std::string, int> TOOL_MIN_MODE = {
     {"db_query", 1},
     {"save_article", 2}, {"search_articles", 0},
     {"create_app", 2}, {"edit_app_file", 2}, {"list_apps", 0},
+    {"app_token", 1}, {"app_db_execute", 2}, {"app_db_set_cap", 2},
     {"create_service", 2}, {"manage_service", 2}, {"delete_service", 2}, {"list_services", 0},
+    {"tail_service_logs", 0},
+    // Phase 4 sub-agents
+    {"spawn_subagent", 2}, {"wait_subagent", 2}, {"cancel_subagent", 2},
+    {"list_subagents", 0},
 };
 
 int modeLevel(Mode m) {
@@ -558,13 +563,65 @@ void registerListAppsImpl() {
         params, {}));
 }
 
+void registerAppTokenImpl() {
+    auto params = nlohmann::json::object({
+        {"app_id", {{"type", "string"},
+            {"description", "The app's ID string returned by create_app."}}},
+    });
+    ALL_TOOLS.push_back(makeTool("app_token",
+        "Return the per-app agent_token used by /apps/<slug>/_sdk.js to call "
+        "/api/apps/<slug>/db/* and /main/*. Mints one lazily on first call. "
+        "Use this when the SDK default isn't enough and you need to craft "
+        "manual fetch() calls from the app's HTML.",
+        params, {"app_id"}));
+}
+
+void registerAppDbExecuteImpl() {
+    auto params = nlohmann::json::object({
+        {"app_id", {{"type", "string"},
+            {"description", "The app's ID string returned by create_app."}}},
+        {"sql", {{"type", "string"},
+            {"description", "SQL statement to execute against the app's own "
+                            "sandboxed SQLite file at ~/.avacli/app_data/<slug>.db. "
+                            "Any DDL/DML is allowed; ATTACH/DETACH is blocked."}}},
+        {"params", {{"type", "array"},
+            {"description", "Optional positional bind values for ?1, ?2, ..."},
+            {"items", nlohmann::json::object()}}},
+    });
+    ALL_TOOLS.push_back(makeTool("app_db_execute",
+        "Run a SQL statement against an app's private SQLite database. Useful "
+        "for seeding tables, running migrations, or importing demo data while "
+        "building an app. Size-cap enforcement applies to writes.",
+        params, {"app_id", "sql"}));
+}
+
+void registerAppDbSetCapImpl() {
+    auto params = nlohmann::json::object({
+        {"app_id", {{"type", "string"},
+            {"description", "The app's ID string returned by create_app."}}},
+        {"mb", {{"type", "integer"},
+            {"description", "Per-app size cap in MB. 0 = inherit the global "
+                            "settings.apps.db_size_cap_mb value. Valid range "
+                            "16–16384 for non-zero values."}}},
+    });
+    ALL_TOOLS.push_back(makeTool("app_db_set_cap",
+        "Override the per-app SQLite size cap. Set mb=0 to clear the override "
+        "and inherit the global platform setting.",
+        params, {"app_id", "mb"}));
+}
+
 void registerCreateServiceImpl() {
     auto params = nlohmann::json::object({
         {"name", {{"type", "string"}, {"description", "Service name"}}},
-        {"type", {{"type", "string"}, {"description", "Service type: rss_feed, scheduled_prompt, custom_script, bot, custom"}}},
+        {"type", {{"type", "string"}, {"description", "Service type: process, rss_feed, scheduled_prompt, custom_script, bot, custom"}}},
         {"description", {{"type", "string"}, {"description", "What this service does"}}},
         {"config", {{"type", "object"}, {"description",
             "REQUIRED configuration object. Fields depend on type:\n"
+            "- process: {\"runtime\": \"python\"|\"node\"|\"bin\", \"entrypoint\": \"<script-or-binary>\", \"args\": [...], "
+              "\"env\": {\"KEY\": \"value\" or \"vault:<name>\"}, \"working_dir\": \"<path, rel to ~/.avacli/services/<id>/ or absolute>\", "
+              "\"restart\": {\"policy\": \"always\"|\"on_failure\"|\"never\", \"backoff_initial_ms\": 1000, \"backoff_max_ms\": 60000, "
+              "\"max_restarts_per_hour\": 20}}. For long-running daemons like Discord bots. "
+              "Use env values of the form 'vault:<name>' to inject secrets stored via vault_store.\n"
             "- rss_feed: {\"url\": \"<feed_url>\", \"interval_seconds\": 300}\n"
             "- scheduled_prompt: {\"prompt\": \"<the prompt text to execute each interval>\", \"interval_seconds\": 3600}\n"
             "- custom_script: {\"script\": \"<shell command or script path>\", \"interval_seconds\": 60}\n"
@@ -573,9 +630,9 @@ void registerCreateServiceImpl() {
         }}},
     });
     ALL_TOOLS.push_back(makeTool("create_service",
-        "Create a background service. IMPORTANT: The 'config' parameter is REQUIRED and must include "
-        "type-specific fields (e.g. 'prompt' for scheduled_prompt, 'url' for rss_feed). "
-        "A service created without proper config will fail when started.",
+        "Create a background service. Use 'process' for a long-running daemon (Python/Node/binary) that should stay up 24/7 "
+        "with automatic restart (e.g. a Discord bot). Use 'rss_feed'/'scheduled_prompt'/'custom_script' for interval-based tick services. "
+        "IMPORTANT: The 'config' parameter is REQUIRED and must include type-specific fields or the service will fail when started.",
         params, {"name", "type", "config"}));
 }
 
@@ -604,6 +661,90 @@ void registerListServicesImpl() {
     auto params = nlohmann::json::object();
     ALL_TOOLS.push_back(makeTool("list_services",
         "List all background services with their IDs, names, types, and current status.",
+        params, {}));
+}
+
+void registerTailServiceLogsImpl() {
+    auto params = nlohmann::json::object({
+        {"id",    {{"type", "string"}, {"description", "Service ID returned by create_service / list_services"}}},
+        {"lines", {{"type", "integer"},
+                   {"description", "Number of most-recent log lines to return (default 50, max 500)"}}},
+        {"level", {{"type", "string"},
+                   {"description", "Optional severity filter: one of 'debug', 'info', 'warn', 'error'. Omit for all levels."}}},
+    });
+    ALL_TOOLS.push_back(makeTool("tail_service_logs",
+        "Return the most-recent log lines for a background service (Python/Node process, "
+        "scheduled prompt, RSS feed, etc.). Use this to diagnose why a service crashed, "
+        "what it's currently printing to stdout, or to confirm a fix landed after restart. "
+        "Safe in Question mode (read-only).",
+        params, {"id"}));
+}
+
+void registerSpawnSubAgentImpl() {
+    auto params = nlohmann::json::object({
+        {"goal", {{"type", "string"},
+                  {"description", "Concrete, self-contained goal for the sub-agent. Describe what success looks like."}}},
+        {"allowed_paths", {{"type", "array"},
+                           {"items", {{"type", "string"}}},
+                           {"description",
+                            "Workspace-relative or absolute path prefixes the sub-agent may write under. "
+                            "Empty array = no restriction. Writes outside return path_not_allowed."}}},
+        {"allowed_tools", {{"type", "array"},
+                           {"items", {{"type", "string"}}},
+                           {"description",
+                            "Whitelist of tool names the sub-agent may call. Empty array = no restriction "
+                            "(still gated by Agent-mode tool registry)."}}},
+        {"model", {{"type", "string"},
+                   {"description", "Optional xAI model id override. Defaults to the parent session's model."}}},
+    });
+    ALL_TOOLS.push_back(makeTool("spawn_subagent",
+        "Spawn a scoped sub-agent in the background. The sub-agent runs its own xAI agent loop "
+        "with Agent-mode tools, restricted to the allowed_paths and allowed_tools you specify, "
+        "and is subject to the platform's subagents_max_depth setting (0 disables sub-agents; "
+        "depth+1 > max returns max_depth_exceeded). Writes to the same file from sibling "
+        "sub-agents serialize through a lease system — the second writer gets resource_locked "
+        "and may wait_subagent or choose a different file. Returns a task_id; use wait_subagent "
+        "to block for completion or list_subagents to poll.",
+        params, {"goal"}));
+}
+
+void registerWaitSubAgentImpl() {
+    auto params = nlohmann::json::object({
+        {"task_id", {{"type", "string"}, {"description", "task id returned by spawn_subagent"}}},
+        {"timeout_ms", {{"type", "integer"},
+                        {"description", "Max milliseconds to wait. 0 or omitted = wait indefinitely. Default 60000."}}},
+    });
+    ALL_TOOLS.push_back(makeTool("wait_subagent",
+        "Block until a sub-agent reaches a terminal state (succeeded, failed, cancelled) or the "
+        "timeout elapses. Returns the task record with result summary + transcript. If the task "
+        "is still running when the timeout fires, status will be 'running' and you may call this "
+        "again. Safe to use when coordinating sibling writes: if one sub-agent reported "
+        "resource_locked holding=<other>, call wait_subagent on <other> then retry.",
+        params, {"task_id"}));
+}
+
+void registerCancelSubAgentImpl() {
+    auto params = nlohmann::json::object({
+        {"task_id", {{"type", "string"}, {"description", "task id returned by spawn_subagent"}}},
+    });
+    ALL_TOOLS.push_back(makeTool("cancel_subagent",
+        "Request cancellation of a running sub-agent. The sub-agent observes its cancel flag at "
+        "the next tool-loop iteration; leases it holds are released automatically when the task "
+        "transitions to cancelled. No-op on tasks that are already terminal.",
+        params, {"task_id"}));
+}
+
+void registerListSubAgentsImpl() {
+    auto params = nlohmann::json::object({
+        {"status", {{"type", "string"},
+                    {"description",
+                     "Optional filter: 'pending', 'running', 'succeeded', 'failed', 'cancelled'. Omit for all."}}},
+        {"limit",  {{"type", "integer"}, {"description", "Max rows to return (default 50)"}}},
+    });
+    ALL_TOOLS.push_back(makeTool("list_subagents",
+        "List recent sub-agent tasks. Includes goal, status, depth, parent_task_id, and timing. "
+        "Use this to check what's currently running before you spawn something new, or to find "
+        "the task_id of a holder reported in a resource_locked response.",
         params, {}));
 }
 
@@ -670,10 +811,19 @@ void ToolRegistry::registerAll() {
     registerCreateAppImpl();
     registerEditAppFileImpl();
     registerListAppsImpl();
+    registerAppTokenImpl();
+    registerAppDbExecuteImpl();
+    registerAppDbSetCapImpl();
     registerCreateServiceImpl();
     registerManageServiceImpl();
     registerDeleteServiceImpl();
     registerListServicesImpl();
+    registerTailServiceLogsImpl();
+    // Phase 4 sub-agents
+    registerSpawnSubAgentImpl();
+    registerWaitSubAgentImpl();
+    registerCancelSubAgentImpl();
+    registerListSubAgentsImpl();
     REGISTERED = true;
     spdlog::debug("ToolRegistry: Registered {} tools", ALL_TOOLS.size());
 }

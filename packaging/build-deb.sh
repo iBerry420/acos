@@ -29,13 +29,17 @@ Section: devel
 Priority: optional
 Architecture: $ARCH
 Depends: libcurl4 (>= 7.68.0), libssl3 | libssl1.1
+Recommends: python3 (>= 3.8), python3-venv, nodejs (>= 18), npm
 Replaces: avalynnai (<< 2.0.0)
 Conflicts: avalynnai (<< 2.0.0)
 Provides: avalynnai
 Maintainer: iBerry420
 Homepage: https://github.com/iBerry420/acos
 Description: avacli (open source) - Single-binary autonomous AI agent platform powered by xAI Grok.
- avacli provides a local web UI, embedded WebIDE, agent tools, cloud fleet management (Vultr), and more. No external runtimes required beyond libcurl.
+ avacli provides a local web UI, embedded WebIDE, agent tools, cloud fleet management (Vultr), and more.
+ The core binary has no runtime dependencies beyond libcurl + libssl; python3-venv, nodejs, and npm
+ are recommended only for users who intend to host long-running Python or Node services (e.g. a
+ Discord bot) through the built-in process supervisor.
 EOF
 
 cat > "$PKG_DIR/DEBIAN/postinst" << 'EOF'

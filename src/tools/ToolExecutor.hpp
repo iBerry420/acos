@@ -17,8 +17,12 @@ public:
                          Mode mode,
                          AskUserFn askUser = nullptr);
 
+    virtual ~ToolExecutor() = default;
+
     /// Execute tool by name with JSON arguments. Returns result or error message.
-    std::string execute(const std::string& name, const std::string& arguments);
+    /// Virtual so ScopedToolExecutor (sub-agents, Phase 4) can gate on
+    /// allowed_paths / allowed_tools and wrap writes in leases.
+    virtual std::string execute(const std::string& name, const std::string& arguments);
 
     void setAskUser(AskUserFn fn) { askUser_ = std::move(fn); }
     void setModeChangeCallback(ModeChangeFn fn) { onModeChange_ = std::move(fn); }
@@ -34,7 +38,21 @@ public:
     void setVaultPassword(std::string pw) { vaultPassword_ = std::move(pw); }
     const std::string& vaultPassword() const { return vaultPassword_; }
 
-private:
+    /// Sub-agent context (Phase 4). Root chat calls leave these at defaults
+    /// (empty task id, depth 0); ScopedToolExecutor sets them at construction
+    /// so the `spawn_subagent` dispatch can correctly set `parent_task_id`
+    /// and `depth+1` on children.
+    void setSubAgentContext(std::string taskId, int depth) {
+        subAgentTaskId_ = std::move(taskId);
+        subAgentDepth_ = depth;
+    }
+    const std::string& subAgentTaskId() const { return subAgentTaskId_; }
+    int subAgentDepth() const { return subAgentDepth_; }
+
+    const std::string& workspace() const { return workspace_; }
+    Mode mode() const { return mode_; }
+
+protected:
     std::string workspace_;
     Mode mode_;
     AskUserFn askUser_;
@@ -43,6 +61,8 @@ private:
     std::vector<EditRecord> editHistory_;
     std::string searchModel_;
     std::string vaultPassword_;
+    std::string subAgentTaskId_;
+    int subAgentDepth_ = 0;
 };
 
 } // namespace avacli

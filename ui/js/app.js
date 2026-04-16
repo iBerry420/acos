@@ -4055,9 +4055,60 @@ renderNodeRoleSection()+
 '<div class="set-section"><h3>'+ic('chat',16)+' Session</h3>'+
 '<div class="set-row"><span class="set-label">Current Session</span><span class="set-value">'+(esc(S.session)||'default')+'</span></div>'+
 '<div class="set-row"><span class="set-label">Messages</span><span class="set-value">'+S.messages.length+'</span></div></div>'+
+renderPlatformCapabilitiesSection()+
 '<button class="btn-save" onclick="saveSettings()">'+ic('save',16)+' Save Settings</button>'+
 '</div>';
 }
+
+/* ── Platform capabilities (P0.3) ─────────────────────── */
+function renderPlatformCapabilitiesSection(){
+var st=S.status||{};
+var workdir=st.services_workdir_root||'';
+var workdirDefault=st.services_workdir_root_default||'~/.avacli/services';
+var dbCap=(typeof st.apps_db_size_cap_mb==='number')?st.apps_db_size_cap_mb:256;
+var depth=(typeof st.subagents_max_depth==='number')?st.subagents_max_depth:0;
+var depthLabel=(depth===0)?'Disabled':(depth+' '+(depth===1?'level':'levels'));
+return '<div class="set-section"><h3>'+ic('zap',16)+' Platform Capabilities</h3>'+
+'<p style="font-size:.8125rem;color:var(--text-muted);margin:0 0 .75rem;line-height:1.5">Controls for long-running services, app databases, and sub-agent delegation. Changes take effect without a server restart.</p>'+
+
+'<div class="set-row" style="align-items:flex-start;flex-wrap:wrap">'+
+'<span class="set-label" title="Root directory for per-service workdirs (venv, node_modules, logs)">Services workdir</span>'+
+'<div style="display:flex;gap:.375rem;flex:1;min-width:220px">'+
+'<input class="set-input" id="platWorkdirInput" value="'+esc(workdir)+'" placeholder="'+esc(workdirDefault)+'" style="flex:1">'+
+'<button type="button" class="btn-sm" onclick="resetPlatformWorkdir()" title="Reset to '+esc(workdirDefault)+'">'+ic('refresh',12)+'</button>'+
+'</div></div>'+
+'<div style="font-size:.75rem;color:var(--text-muted);margin:0 0 .5rem">Default: <code style="font-size:.75rem">'+esc(workdirDefault)+'</code>. Per-user. Running services keep their original workdir until restarted.</div>'+
+
+'<div class="set-row" style="align-items:center">'+
+'<span class="set-label" title="Global ceiling for per-app SQLite size (MB). Range 16\u201316384.">App DB cap</span>'+
+'<div style="display:flex;gap:.5rem;align-items:center;flex:1;min-width:220px">'+
+'<input type="range" id="platDbCapSlider" min="16" max="16384" step="16" value="'+dbCap+'" oninput="document.getElementById(\'platDbCapInput\').value=this.value" style="flex:1">'+
+'<input class="set-input" id="platDbCapInput" type="number" min="16" max="16384" step="16" value="'+dbCap+'" oninput="document.getElementById(\'platDbCapSlider\').value=this.value" style="width:88px;text-align:right">'+
+'<span style="font-size:.8125rem;color:var(--text-muted)">MB</span>'+
+'</div></div>'+
+'<div style="font-size:.75rem;color:var(--text-muted);margin:0 0 .5rem">Apps can override this via an individual cap. Writes over quota return HTTP 507; reads still work.</div>'+
+
+'<div class="set-row" style="align-items:center">'+
+'<span class="set-label" title="Maximum nesting depth for agent-spawned sub-agents. 0 disables sub-agents entirely.">Sub-agent depth</span>'+
+'<div style="display:flex;gap:.5rem;align-items:center;flex:1;min-width:220px">'+
+'<input type="range" id="platDepthSlider" min="0" max="16" step="1" value="'+depth+'" oninput="updatePlatformDepthLabel(this.value)" style="flex:1">'+
+'<span id="platDepthLabel" style="font-size:.875rem;color:var(--accent-pale);font-weight:600;min-width:72px;text-align:right">'+esc(depthLabel)+'</span>'+
+'</div></div>'+
+'<div style="font-size:.75rem;color:var(--text-muted);margin:0 0 .25rem">0 = disabled (spawn_subagent rejects calls). 1\u201316 = allowed nesting depth. Default 0.</div>'+
+
+'</div>';
+}
+
+window.resetPlatformWorkdir=function(){
+var def=(S.status&&S.status.services_workdir_root_default)||'~/.avacli/services';
+var el=document.getElementById('platWorkdirInput');
+if(el)el.value=def;
+};
+window.updatePlatformDepthLabel=function(v){
+var n=parseInt(v,10)||0;
+var el=document.getElementById('platDepthLabel');
+if(el)el.textContent=(n===0)?'Disabled':(n+' '+(n===1?'level':'levels'));
+};
 
 window.saveXaiKey=function(){
 var k=document.getElementById('apiKeyInput');if(!k||!k.value.trim()){toast('Enter an xAI API key','error');return;}
@@ -4303,6 +4354,22 @@ var newWs=wsInput?wsInput.value.trim():'';
 
 var body={model:S.model};
 
+var wdEl=document.getElementById('platWorkdirInput');
+if(wdEl){
+var wv=wdEl.value.trim();
+if(wv)body.services_workdir_root=wv;
+}
+var dcEl=document.getElementById('platDbCapInput');
+if(dcEl){
+var dcv=parseInt(dcEl.value,10);
+if(!isNaN(dcv))body.apps_db_size_cap_mb=dcv;
+}
+var sdEl=document.getElementById('platDepthSlider');
+if(sdEl){
+var sdv=parseInt(sdEl.value,10);
+if(!isNaN(sdv))body.subagents_max_depth=sdv;
+}
+
 var promises=[];
 promises.push(api('/api/settings',{method:'POST',body:body}));
 if(newWs&&S.status&&newWs!==S.status.workspace){
@@ -4322,9 +4389,12 @@ return api('/api/status');
 }).then(function(st){
 if(st){
 S.hasXaiKey=!!st.has_xai_key;
+S.status=st;
 }
 render();
-}).catch(function(){});
+}).catch(function(e){
+if(e&&e.message)toast('Failed: '+e.message,'error');
+});
 };
 
 /* ── Knowledge Base Page ──────────────────────────────── */

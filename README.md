@@ -17,11 +17,15 @@
 | **Vault** | AES-256-GCM encrypted storage (OpenSSL) for secrets the agent can use with vault tools. |
 | **Custom tools** | JSON tool definitions in `~/.avacli/custom_tools/` (names must start with `custom_`). |
 | **Apps platform** | Build and serve full web apps (HTML/CSS/JS) from the embedded database. Agent can scaffold apps via `create_app` + `edit_app_file`. |
-| **Background services** | Scheduled prompts, RSS feeds, and custom scripts that run on intervals with auto-stop on repeated failures. |
+| **Per-app SQLite** | Every generated app gets its own sandboxed `~/.avacli/app_data/<slug>.db` with an auto-injected `window.avacli` SDK (`db`, `main`, `ai`). Agent tokens + authorizer hooks keep apps inside their own sandbox. |
+| **Background services** | Scheduled prompts, RSS feeds, custom scripts, and **long-running `process` services** (Python / Node / native binaries) supervised cross-platform with restart policies, exponential backoff, and per-service venv / npm install. |
+| **Sub-agents (scoped)** | The agent can delegate bounded work to child agents with `spawn_subagent {goal, allowed_paths, allowed_tools}`. Lease-based write coordination prevents siblings from clobbering each other. xAI-only, depth-capped in Settings, disabled by default. |
 | **Knowledge Base** | Persistent article storage for research, plans, and notes that survive across chat sessions. |
-| **SQLite database** | Built-in persistence for apps, services, articles, event logs — no external database required. |
+| **SQLite database** | Built-in persistence for apps, services, articles, event logs, agent tasks — no external database required. |
 
 Runtime system dependencies are **libcurl**, **OpenSSL**, and **SQLite3**. Other libraries (**CLI11**, **nlohmann/json**, **spdlog**, **cpp-httplib**) are pulled at configure time via CMake `FetchContent`.
+
+**Optional runtimes** (only needed if you plan to host long-running Python or Node services through the process supervisor — e.g. a Discord bot): `python3` + `python3-venv`, or `nodejs` + `npm`. The Debian package declares these as `Recommends`; they are **not** required for core avacli functionality.
 
 ---
 
@@ -72,10 +76,36 @@ Registered in **`ToolRegistry::registerAll`**:
 | Vault | `vault_store`, `vault_retrieve`, `vault_remove` |
 | Database | `db_query` |
 | Knowledge | `save_article`, `search_articles` |
-| Apps | `create_app`, `edit_app_file`, `list_apps` |
-| Services | `create_service`, `manage_service`, `delete_service`, `list_services` |
+| Apps | `create_app`, `edit_app_file`, `list_apps`, `app_token`, `app_db_execute`, `app_db_set_cap` |
+| Services | `create_service`, `manage_service`, `delete_service`, `list_services`, `tail_service_logs` |
+| Sub-agents | `spawn_subagent`, `wait_subagent`, `cancel_subagent`, `list_subagents` |
 
 Which tools are exposed depends on **mode** (`getToolsForMode`).
+
+### Platform capabilities (v2.2 — services, app DB, sub-agents)
+
+Three knobs in the Settings page control how much the agent is allowed to do:
+
+| Setting | Default | Range | Effect |
+|---|---|---|---|
+| `services_workdir_root` | `~/.avacli/services` | absolute path | Where per-service workdirs (`venv/`, `node_modules/`, logs) live. Per-user, no `/var/lib/avacli/`. |
+| `apps_db_size_cap_mb` | `256` | `16`–`16384` | Global ceiling for per-app SQLite size. Per-app override via `apps.db_size_cap_mb` column; writes over quota return HTTP 507. |
+| `subagents_max_depth` | `0` (disabled) | `0`–`16` | Nesting cap for `spawn_subagent`. `0` disables the feature entirely. Raising the slider takes effect without a server restart. |
+
+**Long-running process services** — `create_service` now accepts `type: "process"` with a runtime (`python` / `node` / `bin`), entrypoint, args, env (secrets via `vault:<name>` are resolved at spawn), working dir, and restart policy (`always` / `on_failure` / `never` with exponential backoff). The supervisor auto-bootstraps a per-service venv or `node_modules` on first start and rehashes `requirements.txt` / `package.json` to skip reinstalls. SSE log stream at `GET /api/services/:id/logs/stream`; status at `GET /api/services/:id/status`; signal at `POST /api/services/:id/signal` with `{"signal": "term"|"kill"|"restart"}`.
+
+**Per-app SQLite** — every app gets `~/.avacli/app_data/<slug>.db`, opened with WAL + FK + an `sqlite3_set_authorizer` hook that denies `ATTACH` / `DETACH` and restricts pragmas. Generated HTML is served with `<script src="_sdk.js">` injected, exposing:
+
+```js
+window.avacli.db.query(sql, params)     // POST /api/apps/:slug/db/query
+window.avacli.db.execute(sql, params)   // POST /api/apps/:slug/db/execute
+window.avacli.db.schema()               // GET  /api/apps/:slug/db/schema
+window.avacli.main.query(viewName, p)   // whitelisted main DB views only
+```
+
+Endpoints auth with the per-app `agent_token` (bearer + same-origin referer). A whitelist of views (`articles_public`, `apps_directory`, `my_app`) is the only path into the main DB — apps never run raw SQL there.
+
+**Sub-agents** — `spawn_subagent` starts a child `AgentEngine` on its own thread with a `ScopedToolExecutor` that enforces `allowed_paths` (glob match) and `allowed_tools` (whitelist). Write leases in `agent_leases` serialize sibling writes to the same path; the second writer gets `{"error":"resource_locked","holder":"<task_id>"}` and is expected to `wait_subagent(holder)`. All sub-agents use `XAIClient` — no OpenAI / Anthropic / Ollama. Tasks are visible at `GET /api/tasks`, with SSE event streams at `GET /api/tasks/:id/events/stream`.
 
 ### Agent reliability features
 
@@ -253,8 +283,8 @@ If you ship a binary next to **`install.sh`**, that script can install to `/usr/
 ## Packaging (maintainers)
 
 ```bash
-./packaging/build-all.sh 2.0.0
-./packaging/build-deb.sh 2.0.0 amd64 build/avacli ./dist
+./packaging/build-all.sh 2.2.0
+./packaging/build-deb.sh 2.2.0 amd64 build/avacli ./dist
 ```
 
 See **`packaging/`** for distribution notes.
