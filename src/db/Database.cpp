@@ -327,6 +327,143 @@ void Database::migrate() {
         setVersion(3);
         spdlog::info("Database migrated to v3 (nodes + mesh_events)");
     }
+
+    if (ver < 4) {
+        // Phase 1 platform capabilities: supervisor state for `type:"process"`
+        // services. Columns default to 0 so older rows of tick-type services
+        // (rss_feed, scheduled_prompt, custom_script) are unaffected — they
+        // simply don't read these fields.
+        sqlite3_exec(db_,
+            "ALTER TABLE services ADD COLUMN pid INTEGER DEFAULT 0",
+            nullptr, nullptr, &err);
+        if (err) { sqlite3_free(err); err = nullptr; }
+        sqlite3_exec(db_,
+            "ALTER TABLE services ADD COLUMN started_at INTEGER DEFAULT 0",
+            nullptr, nullptr, &err);
+        if (err) { sqlite3_free(err); err = nullptr; }
+        sqlite3_exec(db_,
+            "ALTER TABLE services ADD COLUMN restart_count INTEGER DEFAULT 0",
+            nullptr, nullptr, &err);
+        if (err) { sqlite3_free(err); err = nullptr; }
+        sqlite3_exec(db_,
+            "ALTER TABLE services ADD COLUMN last_exit_code INTEGER DEFAULT 0",
+            nullptr, nullptr, &err);
+        if (err) { sqlite3_free(err); err = nullptr; }
+
+        // Existing idx_svc_logs_svc already covers (service_id, timestamp).
+        // Add a DESC-ordered index for tail-N queries.
+        sqlite3_exec(db_,
+            "CREATE INDEX IF NOT EXISTS idx_svc_logs_svc_ts_desc "
+            "ON service_logs(service_id, timestamp DESC)",
+            nullptr, nullptr, &err);
+        if (err) { sqlite3_free(err); err = nullptr; }
+
+        setVersion(4);
+        spdlog::info("Database migrated to v4 (services supervisor state)");
+    }
+
+    if (ver < 5) {
+        // Phase 3 platform capabilities: per-app SQLite access + feature
+        // flags + usage accounting. Defaults keep older rows behaving
+        // identically (db_enabled=1, ai_enabled=1, db_size_cap_mb=0 inherits
+        // settings). agent_token is filled lazily on first GET/POST that
+        // needs it (see AppTokens::ensureForAppId) — backfilling every
+        // existing app at migration time would require us to call OpenSSL
+        // inside migrate() which adds a dependency ordering constraint we
+        // don't need.
+        sqlite3_exec(db_,
+            "ALTER TABLE apps ADD COLUMN agent_token TEXT DEFAULT ''",
+            nullptr, nullptr, &err);
+        if (err) { sqlite3_free(err); err = nullptr; }
+        sqlite3_exec(db_,
+            "ALTER TABLE apps ADD COLUMN db_enabled INTEGER DEFAULT 1",
+            nullptr, nullptr, &err);
+        if (err) { sqlite3_free(err); err = nullptr; }
+        sqlite3_exec(db_,
+            "ALTER TABLE apps ADD COLUMN ai_enabled INTEGER DEFAULT 1",
+            nullptr, nullptr, &err);
+        if (err) { sqlite3_free(err); err = nullptr; }
+        sqlite3_exec(db_,
+            "ALTER TABLE apps ADD COLUMN db_size_cap_mb INTEGER DEFAULT 0",
+            nullptr, nullptr, &err);
+        if (err) { sqlite3_free(err); err = nullptr; }
+
+        // Unique on non-empty agent_token only — empty strings are allowed
+        // to coexist (rows pre-token). SQLite's partial-index syntax lets
+        // us express this without a trigger.
+        sqlite3_exec(db_,
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_apps_agent_token "
+            "ON apps(agent_token) WHERE agent_token != ''",
+            nullptr, nullptr, &err);
+        if (err) { sqlite3_free(err); err = nullptr; }
+
+        sqlite3_exec(db_, R"(
+            CREATE TABLE IF NOT EXISTS app_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                app_id TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                kind TEXT NOT NULL,
+                tokens INTEGER DEFAULT 0,
+                bytes INTEGER DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_app_usage_app_ts ON app_usage(app_id, timestamp);
+            CREATE INDEX IF NOT EXISTS idx_app_usage_kind ON app_usage(kind, timestamp);
+        )", nullptr, nullptr, &err);
+        if (err) { spdlog::error("Migration v5 error: {}", err); sqlite3_free(err); err = nullptr; }
+
+        setVersion(5);
+        spdlog::info("Database migrated to v5 (apps DB access + usage)");
+    }
+
+    if (ver < 6) {
+        // Phase 4 platform capabilities: sub-agents with scoped writes +
+        // lease-based coordination. xAI-only (no provider column — the rest
+        // of the stack already hard-assumes xAI). Depth is checked against
+        // `subagents_max_depth` setting at spawn time; 0 disables entirely.
+        //
+        // agent_leases.resource_key is UNIQUE so exactly one task can hold
+        // a given resource (typically a file path). `expires_at` lets a
+        // background sweep reap stale entries when a task crashes without
+        // releasing.
+        sqlite3_exec(db_, R"(
+            CREATE TABLE IF NOT EXISTS agent_tasks (
+                id TEXT PRIMARY KEY,
+                parent_task_id TEXT DEFAULT '',
+                session_id TEXT DEFAULT '',
+                goal TEXT NOT NULL,
+                allowed_paths TEXT DEFAULT '[]',
+                allowed_tools TEXT DEFAULT '[]',
+                depth INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'pending',
+                result TEXT DEFAULT '',
+                error TEXT DEFAULT '',
+                prompt_tokens INTEGER DEFAULT 0,
+                completion_tokens INTEGER DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                started_at INTEGER DEFAULT 0,
+                finished_at INTEGER DEFAULT 0,
+                cancel_requested INTEGER DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_tasks_parent ON agent_tasks(parent_task_id);
+            CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status);
+            CREATE INDEX IF NOT EXISTS idx_agent_tasks_session ON agent_tasks(session_id);
+
+            CREATE TABLE IF NOT EXISTS agent_leases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id TEXT NOT NULL,
+                resource_key TEXT NOT NULL,
+                acquired_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_leases_key ON agent_leases(resource_key);
+            CREATE INDEX IF NOT EXISTS idx_agent_leases_task ON agent_leases(task_id);
+            CREATE INDEX IF NOT EXISTS idx_agent_leases_expires ON agent_leases(expires_at);
+        )", nullptr, nullptr, &err);
+        if (err) { spdlog::error("Migration v6 error: {}", err); sqlite3_free(err); err = nullptr; }
+
+        setVersion(6);
+        spdlog::info("Database migrated to v6 (agent_tasks + agent_leases)");
+    }
 }
 
 } // namespace avacli

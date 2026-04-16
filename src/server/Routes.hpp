@@ -16,8 +16,10 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx);
 void registerDBRoutes(httplib::Server& svr, ServerContext ctx);
 void registerKnowledgeRoutes(httplib::Server& svr, ServerContext ctx);
 void registerAppRoutes(httplib::Server& svr, ServerContext ctx);
+void registerAppDBRoutes(httplib::Server& svr, ServerContext ctx);
 void registerServiceRoutes(httplib::Server& svr, ServerContext ctx);
 void registerSystemRoutes(httplib::Server& svr, ServerContext ctx);
 void registerRelayRoutes(httplib::Server& svr, ServerContext ctx);
+void registerSubAgentRoutes(httplib::Server& svr, ServerContext ctx);
 
 } // namespace avacli

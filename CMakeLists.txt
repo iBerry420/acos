@@ -80,6 +80,7 @@ set(SOURCES
   src/config/ApiKeyStorage.cpp
   src/config/VaultStorage.cpp
   src/config/ServeSettings.cpp
+  src/config/PlatformSettings.cpp
   src/config/Config.cpp
   src/config/ModelRegistry.cpp
   src/client/XAIClient.cpp
@@ -103,11 +104,16 @@ set(SOURCES
   src/server/RoutesDB.cpp
   src/server/RoutesKnowledge.cpp
   src/server/RoutesApps.cpp
+  src/server/RoutesAppDB.cpp
+  src/server/AppTokens.cpp
   src/server/RoutesServices.cpp
+  src/server/RoutesSubAgents.cpp
   src/server/RoutesSystem.cpp
   src/server/LogBuffer.cpp
   src/db/Database.cpp
+  src/db/AppDatabase.cpp
   src/services/ServiceManager.cpp
+  src/services/DepInstaller.cpp
   src/services/MeshManager.cpp
   src/services/RelayManager.cpp
   src/services/RelayClient.cpp
@@ -116,8 +122,14 @@ set(SOURCES
   src/tools/ProjectNotes.cpp
   src/tools/ToolExecutor.cpp
   src/tools/ToolRegistry.cpp
+  src/agents/LeaseManager.cpp
+  src/agents/SubAgentManager.cpp
+  src/agents/ScopedToolExecutor.cpp
   src/platform/Paths.cpp
   src/platform/ProcessRunner.cpp
+  src/platform/ProcessSupervisor.cpp
+  src/platform/Runtime.cpp
+  src/platform/Hash.cpp
 )
 
 add_executable(avacli ${SOURCES})

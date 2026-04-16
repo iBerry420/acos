@@ -4,6 +4,7 @@
 #include "server/LogBuffer.hpp"
 #include "build_info.h"
 #include "config/ModelRegistry.hpp"
+#include "config/PlatformSettings.hpp"
 #include "config/ServeSettings.hpp"
 #include "services/RelayManager.hpp"
 
@@ -12,6 +13,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 
 namespace avacli {
 
@@ -35,6 +37,11 @@ void registerSettingsRoutes(httplib::Server& svr, ServerContext ctx) {
         j["relay_server"] = ctx.config->relayServer;
         j["has_relay_token"] = !ctx.config->relayToken.empty();
         j["build"] = std::string(AVACLI_BUILD_ID);
+        // Platform capabilities settings (P0.3)
+        j[platformSettings::KEY_SERVICES_WORKDIR_ROOT] = platformSettings::servicesWorkdirRoot();
+        j["services_workdir_root_default"]             = platformSettings::defaultServicesWorkdirRoot();
+        j[platformSettings::KEY_APPS_DB_SIZE_CAP_MB]   = platformSettings::appsDbSizeCapMb();
+        j[platformSettings::KEY_SUBAGENTS_MAX_DEPTH]   = platformSettings::subagentsMaxDepth();
         res.set_content(j.dump(), "application/json");
     });
 
@@ -115,6 +122,39 @@ void registerSettingsRoutes(httplib::Server& svr, ServerContext ctx) {
                 ModelRegistry::refreshModels(newKey);
         }
 
+        // Platform capabilities settings (P0.3). Validate first so the whole
+        // settings POST fails cleanly on a bad value instead of half-saving.
+        std::string normalizedWorkdir;
+        int normalizedDbCap = 0;
+        int normalizedDepth = 0;
+        bool setWorkdir = false, setDbCap = false, setDepth = false;
+        try {
+            if (body.contains(platformSettings::KEY_SERVICES_WORKDIR_ROOT)
+                && body[platformSettings::KEY_SERVICES_WORKDIR_ROOT].is_string()) {
+                normalizedWorkdir = platformSettings::validateWorkdirRoot(
+                    body[platformSettings::KEY_SERVICES_WORKDIR_ROOT].get<std::string>());
+                setWorkdir = true;
+            }
+            if (body.contains(platformSettings::KEY_APPS_DB_SIZE_CAP_MB)
+                && body[platformSettings::KEY_APPS_DB_SIZE_CAP_MB].is_number_integer()) {
+                normalizedDbCap = platformSettings::validateAppsDbSizeCapMb(
+                    body[platformSettings::KEY_APPS_DB_SIZE_CAP_MB].get<int>());
+                setDbCap = true;
+            }
+            if (body.contains(platformSettings::KEY_SUBAGENTS_MAX_DEPTH)
+                && body[platformSettings::KEY_SUBAGENTS_MAX_DEPTH].is_number_integer()) {
+                normalizedDepth = platformSettings::validateSubagentsMaxDepth(
+                    body[platformSettings::KEY_SUBAGENTS_MAX_DEPTH].get<int>());
+                setDepth = true;
+            }
+        } catch (const std::exception& e) {
+            res.status = 400;
+            nlohmann::json err;
+            err["error"] = std::string("invalid setting: ") + e.what();
+            res.set_content(err.dump(), "application/json");
+            return;
+        }
+
         auto path = serveSettingsFilePath();
         fs::create_directories(fs::path(path).parent_path());
 
@@ -142,6 +182,11 @@ void registerSettingsRoutes(httplib::Server& svr, ServerContext ctx) {
         else if (body.contains("xai_api_key") && body["xai_api_key"].is_string()
                  && body["xai_api_key"].get<std::string>().empty())
             settings.erase("xai_api_key");
+
+        // Persist platform capabilities (already validated above).
+        if (setWorkdir) settings[platformSettings::KEY_SERVICES_WORKDIR_ROOT] = normalizedWorkdir;
+        if (setDbCap)   settings[platformSettings::KEY_APPS_DB_SIZE_CAP_MB]   = normalizedDbCap;
+        if (setDepth)   settings[platformSettings::KEY_SUBAGENTS_MAX_DEPTH]   = normalizedDepth;
 
         std::ofstream f(path);
         f << settings.dump(2);

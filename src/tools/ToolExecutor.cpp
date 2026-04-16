@@ -1,10 +1,14 @@
 #include "tools/ToolExecutor.hpp"
 #include "tools/ToolRegistry.hpp"
 #include "tools/ProjectNotes.hpp"
+#include "agents/SubAgentManager.hpp"
 #include "config/ApiKeyStorage.hpp"
 #include "config/VaultStorage.hpp"
 #include "config/ServeSettings.hpp"
 #include "db/Database.hpp"
+#include "db/AppDatabase.hpp"
+#include "server/AppTokens.hpp"
+#include "config/PlatformSettings.hpp"
 #include "services/ServiceManager.hpp"
 #include "platform/Paths.hpp"
 #include "platform/PortableTime.hpp"
@@ -2399,6 +2403,131 @@ std::string ToolExecutor::execute(const std::string& name, const std::string& ar
             return j.dump();
         }
 
+        // ── app_token ────────────────────────────────────────
+        // Minting the per-app agent_token used by the auto-injected
+        // /apps/<slug>/_sdk.js to call the SDK endpoints.
+        if (name == "app_token") {
+            std::string appId = get("app_id");
+            if (appId.empty()) return R"({"error": "app_id required"})";
+            try {
+                auto row = Database::instance().queryOne(
+                    "SELECT id, slug, name FROM apps WHERE id = ?1", {appId});
+                if (row.is_null()) return R"({"error": "app not found"})";
+                std::string tok = AppTokens::ensureForAppId(appId);
+                nlohmann::json j;
+                j["app_id"] = appId;
+                j["slug"] = row.value("slug", "");
+                j["agent_token"] = tok;
+                j["usage_example"] =
+                    "fetch('/api/apps/" + row.value("slug", "") + "/db/query', "
+                    "{method:'POST', headers:{'Authorization':'Bearer ' + TOKEN, "
+                    "'Content-Type':'application/json'}, body:JSON.stringify({sql:'...'}) })";
+                return j.dump();
+            } catch (const std::exception& e) {
+                nlohmann::json err; err["error"] = e.what();
+                return err.dump();
+            }
+        }
+
+        // ── app_db_execute ───────────────────────────────────
+        // Drive an app's sandboxed SQLite from the agent side — useful
+        // during app construction to seed tables / demo data / indices.
+        // Uses the same authorizer + size-cap enforcement as the HTTP path.
+        if (name == "app_db_execute") {
+            std::string appId = get("app_id");
+            std::string sql = get("sql");
+            if (appId.empty()) return R"({"error": "app_id required"})";
+            if (sql.empty()) return R"({"error": "sql required"})";
+
+            auto row = Database::instance().queryOne(
+                "SELECT slug, db_enabled, db_size_cap_mb FROM apps WHERE id = ?1", {appId});
+            if (row.is_null()) return R"({"error": "app not found"})";
+            if (row.value("db_enabled", 1) == 0)
+                return R"({"error": "db disabled for this app"})";
+
+            std::string slug = row.value("slug", "");
+            if (slug.empty()) return R"({"error": "app has no slug"})";
+
+            std::vector<nlohmann::json> params;
+            if (args.contains("params") && args["params"].is_array()) {
+                for (const auto& v : args["params"]) params.push_back(v);
+            }
+
+            try {
+                auto& adb = AppDatabase::forSlug(slug);
+
+                // Size-cap check on likely-writes. Reuses the settings-driven
+                // resolution so per-app overrides and global settings both
+                // apply. Same 507-with-detail contract as the HTTP path.
+                auto isWrite = [](const std::string& s) {
+                    std::string head;
+                    for (char c : s) {
+                        if (std::isspace(static_cast<unsigned char>(c)) && head.empty()) continue;
+                        if (head.size() >= 16) break;
+                        head += static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                    }
+                    for (const char* kw : {"INSERT","UPDATE","DELETE","CREATE","DROP","ALTER","REPLACE"}) {
+                        if (head.rfind(kw, 0) == 0) return true;
+                    }
+                    return false;
+                };
+                if (isWrite(sql)) {
+                    int override_ = row.value("db_size_cap_mb", 0);
+                    int capMb = override_ > 0 ? override_ : platformSettings::appsDbSizeCapMb();
+                    int64_t capBytes = static_cast<int64_t>(capMb) * 1024LL * 1024LL;
+                    int64_t size = adb.diskBytes();
+                    if (size >= capBytes) {
+                        nlohmann::json err;
+                        err["error"] = "db_quota_exceeded";
+                        err["limit_mb"] = capMb;
+                        err["size_bytes"] = size;
+                        return err.dump();
+                    }
+                }
+
+                auto out = adb.execute(sql, params);
+                out["app_id"] = appId;
+                out["slug"] = slug;
+                return out.dump();
+            } catch (const std::exception& e) {
+                nlohmann::json err; err["error"] = e.what();
+                return err.dump();
+            }
+        }
+
+        // ── app_db_set_cap ───────────────────────────────────
+        if (name == "app_db_set_cap") {
+            std::string appId = get("app_id");
+            if (appId.empty()) return R"({"error": "app_id required"})";
+            if (!args.contains("mb") || !args["mb"].is_number_integer())
+                return R"({"error": "mb (integer) required"})";
+            int mb = args["mb"].get<int>();
+            if (mb != 0) {
+                try {
+                    mb = platformSettings::validateAppsDbSizeCapMb(mb);
+                } catch (const std::exception& e) {
+                    nlohmann::json err; err["error"] = e.what();
+                    return err.dump();
+                }
+            }
+            try {
+                auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                auto changes = Database::instance().execute(
+                    "UPDATE apps SET db_size_cap_mb = ?1, updated_at = ?2 WHERE id = ?3",
+                    {std::to_string(mb), std::to_string(now), appId});
+                if (changes == 0) return R"({"error": "app not found"})";
+                nlohmann::json j;
+                j["app_id"] = appId;
+                j["db_size_cap_mb"] = mb;
+                j["effective_mb"] = mb > 0 ? mb : platformSettings::appsDbSizeCapMb();
+                return j.dump();
+            } catch (const std::exception& e) {
+                nlohmann::json err; err["error"] = e.what();
+                return err.dump();
+            }
+        }
+
         // ── create_service ───────────────────────────────────
         if (name == "create_service") {
             std::string svcName = get("name");
@@ -2526,13 +2655,186 @@ std::string ToolExecutor::execute(const std::string& name, const std::string& ar
         if (name == "list_services") {
             auto& db = Database::instance();
             auto rows = db.query(
-                "SELECT id, name, description, type, status, last_run FROM services ORDER BY updated_at DESC");
+                "SELECT id, name, description, type, status, last_run, "
+                "pid, started_at, restart_count, last_exit_code "
+                "FROM services ORDER BY updated_at DESC");
             for (auto& r : rows) {
-                r["live_status"] = ServiceManager::instance().isRunning(r["id"].get<std::string>()) ? "running" : r["status"].get<std::string>();
+                std::string sid = r["id"].get<std::string>();
+                r["live_status"] = ServiceManager::instance().isRunning(sid) ? "running" : r["status"].get<std::string>();
+                auto live = ServiceManager::instance().processStatus(sid);
+                if (!live.is_null()) r["process"] = live;
             }
             nlohmann::json j;
             j["services"] = rows;
             j["count"] = rows.size();
+            return j.dump();
+        }
+
+        // ── tail_service_logs ────────────────────────────────
+        if (name == "tail_service_logs") {
+            std::string id = get("id");
+            if (id.empty()) return R"({"error": "id required"})";
+
+            int lines = 50;
+            try {
+                std::string l = get("lines");
+                if (!l.empty()) lines = std::stoi(l);
+            } catch (...) {}
+            if (lines < 1) lines = 1;
+            if (lines > 500) lines = 500;
+
+            std::string level = get("level");
+
+            auto& db = Database::instance();
+            auto svcRow = db.queryOne(
+                "SELECT id, name, status FROM services WHERE id = ?1", {id});
+            if (svcRow.is_null()) {
+                return R"({"error": "Service not found with id ')" + id + R"('"})";
+            }
+
+            nlohmann::json rows;
+            if (!level.empty()) {
+                rows = db.query(
+                    "SELECT id, timestamp, level, message FROM service_logs "
+                    "WHERE service_id = ?1 AND level = ?2 "
+                    "ORDER BY id DESC LIMIT ?3",
+                    {id, level, std::to_string(lines)});
+            } else {
+                rows = db.query(
+                    "SELECT id, timestamp, level, message FROM service_logs "
+                    "WHERE service_id = ?1 ORDER BY id DESC LIMIT ?2",
+                    {id, std::to_string(lines)});
+            }
+
+            // Return oldest-first so the transcript reads naturally top-down.
+            nlohmann::json ordered = nlohmann::json::array();
+            for (auto it = rows.rbegin(); it != rows.rend(); ++it) {
+                ordered.push_back(*it);
+            }
+
+            nlohmann::json j;
+            j["service_id"]   = id;
+            j["service_name"] = svcRow.value("name", std::string(""));
+            j["status"]       = svcRow.value("status", std::string("unknown"));
+            j["live_status"]  = ServiceManager::instance().isRunning(id) ? "running" : j["status"];
+            j["logs"]         = ordered;
+            j["count"]        = ordered.size();
+
+            // Include live process status for type="process" services -- the
+            // agent almost always wants pid/uptime alongside the logs.
+            auto live = ServiceManager::instance().processStatus(id);
+            if (!live.is_null()) j["process"] = live;
+            return j.dump();
+        }
+
+        // ── spawn_subagent ────────────────────────────────────
+        if (name == "spawn_subagent") {
+            std::string goal = get("goal");
+            if (goal.empty()) return R"({"error": "goal required"})";
+
+            SubAgentManager::SpawnOptions opts;
+            opts.goal = goal;
+            opts.parentTaskId = subAgentTaskId_;
+            opts.parentDepth = subAgentDepth_;
+            opts.sessionId = sessionId_;
+            opts.model = get("model");
+
+            if (args.contains("allowed_paths") && args["allowed_paths"].is_array()) {
+                for (const auto& p : args["allowed_paths"])
+                    if (p.is_string()) opts.allowedPaths.push_back(p.get<std::string>());
+            }
+            if (args.contains("allowed_tools") && args["allowed_tools"].is_array()) {
+                for (const auto& t : args["allowed_tools"])
+                    if (t.is_string()) opts.allowedTools.push_back(t.get<std::string>());
+            }
+
+            auto result = SubAgentManager::instance().spawn(opts);
+            nlohmann::json j;
+            if (!result.ok) {
+                j["error"] = result.errorCode;
+                j["message"] = result.errorMessage;
+                j["max_depth"] = result.maxDepth;
+                j["attempted_depth"] = result.depth;
+                return j.dump();
+            }
+            j["task_id"] = result.taskId;
+            j["depth"] = result.depth;
+            j["max_depth"] = result.maxDepth;
+            j["status"] = "pending";
+            return j.dump();
+        }
+
+        // ── wait_subagent ─────────────────────────────────────
+        if (name == "wait_subagent") {
+            std::string taskId = get("task_id");
+            if (taskId.empty()) return R"({"error": "task_id required"})";
+
+            int timeoutMs = 60000;
+            try {
+                std::string t = get("timeout_ms");
+                if (!t.empty()) timeoutMs = std::stoi(t);
+            } catch (...) {}
+
+            auto rec = SubAgentManager::instance().waitFor(taskId, timeoutMs);
+            nlohmann::json j;
+            j["task_id"] = rec.id;
+            j["status"] = rec.status;
+            j["depth"] = rec.depth;
+            j["parent_task_id"] = rec.parentTaskId;
+            j["goal"] = rec.goal;
+            j["created_at"] = rec.createdAt;
+            j["started_at"] = rec.startedAt;
+            j["finished_at"] = rec.finishedAt;
+            j["cancel_requested"] = rec.cancelRequested;
+            if (!rec.error.empty()) j["error"] = rec.error;
+            if (!rec.result.is_null()) j["result"] = rec.result;
+            j["usage"] = {
+                {"prompt_tokens", rec.promptTokens},
+                {"completion_tokens", rec.completionTokens}};
+            return j.dump();
+        }
+
+        // ── cancel_subagent ───────────────────────────────────
+        if (name == "cancel_subagent") {
+            std::string taskId = get("task_id");
+            if (taskId.empty()) return R"({"error": "task_id required"})";
+            bool signalled = SubAgentManager::instance().cancel(taskId);
+            nlohmann::json j;
+            j["task_id"] = taskId;
+            j["signalled"] = signalled;
+            return j.dump();
+        }
+
+        // ── list_subagents ────────────────────────────────────
+        if (name == "list_subagents") {
+            std::string statusFilter = get("status");
+            int limit = 50;
+            try {
+                std::string l = get("limit");
+                if (!l.empty()) limit = std::stoi(l);
+            } catch (...) {}
+            if (limit < 1) limit = 1;
+            if (limit > 500) limit = 500;
+
+            auto rows = SubAgentManager::instance().list(statusFilter, limit);
+            nlohmann::json arr = nlohmann::json::array();
+            for (const auto& r : rows) {
+                nlohmann::json item;
+                item["task_id"] = r.id;
+                item["parent_task_id"] = r.parentTaskId;
+                item["goal"] = r.goal;
+                item["status"] = r.status;
+                item["depth"] = r.depth;
+                item["created_at"] = r.createdAt;
+                item["started_at"] = r.startedAt;
+                item["finished_at"] = r.finishedAt;
+                item["cancel_requested"] = r.cancelRequested;
+                arr.push_back(item);
+            }
+            nlohmann::json j;
+            j["subagents"] = arr;
+            j["count"] = arr.size();
+            j["max_depth"] = platformSettings::subagentsMaxDepth();
             return j.dump();
         }
 

@@ -5,6 +5,7 @@
 #include "server/EmbeddedAssets.hpp"
 #include "server/UIFileServer.hpp"
 #include "server/LogBuffer.hpp"
+#include "agents/SubAgentManager.hpp"
 #include "config/ModelRegistry.hpp"
 #include "tools/ToolRegistry.hpp"
 #include "platform/Paths.hpp"
@@ -128,12 +129,37 @@ void HttpServer::setupRoutes() {
 
         if (MasterKeyManager::isConfigured() && MasterKeyManager::hasAnyPasswordSet()
             && req.path.rfind("/api/", 0) == 0) {
+            // Per-app SDK endpoints (phase 3) use their own agent_token
+            // instead of the master-key session. Shape:
+            //   /api/apps/<slug>/db/...
+            //   /api/apps/<slug>/main/...
+            //   /api/apps/<slug>/agent[/...]  (phase 3+/4 AI proxy)
+            // Any legacy app-admin endpoints (GET/PUT/DELETE /api/apps,
+            // /api/apps/:id, /api/apps/:id/files, /api/apps/:id/export,
+            // /api/apps/:id/generate-icon) continue to require the master
+            // key — we only bypass for the three SDK-facing suffixes.
+            bool isAppSdkEndpoint = false;
+            if (req.path.rfind("/api/apps/", 0) == 0) {
+                // Start scanning after "/api/apps/".
+                size_t p = std::string("/api/apps/").size();
+                size_t slash = req.path.find('/', p);
+                if (slash != std::string::npos) {
+                    std::string rest = req.path.substr(slash + 1);
+                    if (rest.rfind("db/", 0) == 0 || rest == "db"
+                     || rest.rfind("main/", 0) == 0 || rest == "main"
+                     || rest.rfind("agent", 0) == 0) {
+                        isAppSdkEndpoint = true;
+                    }
+                }
+            }
+
             if (req.path != "/api/auth/login" && req.path != "/api/auth/status"
                 && req.path.rfind("/api/auth/status", 0) != 0
                 && req.path != "/api/auth/accounts"
                 && req.path != "/api/health"
                 && req.path != "/api/mesh/sync"
-                && req.path.rfind("/api/relay/", 0) != 0) {
+                && req.path.rfind("/api/relay/", 0) != 0
+                && !isAppSdkEndpoint) {
                 std::string authHeader = req.get_header_value("Authorization");
                 bool authed = false;
                 if (authHeader.size() > 7 && authHeader.substr(0, 7) == "Bearer ") {
@@ -172,9 +198,16 @@ void HttpServer::setupRoutes() {
     registerDBRoutes(svr, ctx);
     registerKnowledgeRoutes(svr, ctx);
     registerAppRoutes(svr, ctx);
+    registerAppDBRoutes(svr, ctx);
     registerServiceRoutes(svr, ctx);
     registerSystemRoutes(svr, ctx);
     registerRelayRoutes(svr, ctx);
+    registerSubAgentRoutes(svr, ctx);
+
+    // Phase 4: wire SubAgentManager so spawn_subagent can resolve xAI auth
+    // + workspace + default model from the shared config. Must happen after
+    // mergeServeDiskIntoConfig() above.
+    SubAgentManager::instance().setServeConfig(&config_);
 
     // App serving: /apps/:slug/* serves user-created app files from SQLite
     svr.Get(R"(/apps/([^/]+)/(.*))", [](const httplib::Request& req, httplib::Response& res) {

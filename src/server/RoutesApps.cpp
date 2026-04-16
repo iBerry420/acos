@@ -1,12 +1,17 @@
 #include "server/Routes.hpp"
 #include "server/ServerContext.hpp"
 #include "server/ServerHelpers.hpp"
+#include "server/AppTokens.hpp"
 #include "server/LogBuffer.hpp"
 #include "db/Database.hpp"
+#include "db/AppDatabase.hpp"
+#include "platform/Paths.hpp"
+#include "config/PlatformSettings.hpp"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
 #include <curl/curl.h>
+#include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <chrono>
@@ -183,9 +188,21 @@ void registerAppRoutes(httplib::Server& svr, ServerContext ctx) {
                 "VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?5, ?6)",
                 {id, name, desc, slug, std::to_string(now), user});
 
+            // Mint the per-app agent_token immediately so the SDK auto-injected
+            // into the default HTML has something to authenticate with on
+            // first page load.
+            try { AppTokens::ensureForAppId(id); }
+            catch (const std::exception& e) {
+                spdlog::warn("Could not mint agent_token for new app {}: {}", id, e.what());
+            }
+
             std::string defaultHtml = "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"UTF-8\">\n"
                 "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1.0\">\n"
                 "<title>" + name + "</title>\n"
+                // Load the per-app SDK synchronously so window.avacli is
+                // defined before the app's own scripts run. The SDK endpoint
+                // is no-store, so rotating a token takes effect on reload.
+                "<script src=\"/apps/" + slug + "/_sdk.js\"></script>\n"
                 "<style>\n"
                 "*{margin:0;padding:0;box-sizing:border-box}\n"
                 "body{font-family:system-ui,-apple-system,sans-serif;background:#0a0a14;color:#e2e2e8;"
@@ -206,8 +223,16 @@ void registerAppRoutes(httplib::Server& svr, ServerContext ctx) {
                 "<h1>" + name + "</h1>\n"
                 "<div class=\"card\">\n"
                 "<p>Your app is live. Edit the files to build something amazing.</p>\n"
+                "<p style=\"font-size:.8rem;color:#6b6b7b\">"
+                "Persist data with <code>window.avacli.db.execute(sql, params)</code> — "
+                "this app has its own SQLite file sandboxed by avacli.</p>\n"
                 "</div>\n</div>\n"
-                "<script>\n// Your JavaScript here\n</script>\n"
+                "<script>\n"
+                "// avacli.db is auto-injected — example usage:\n"
+                "// await avacli.db.execute('CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY, body TEXT)');\n"
+                "// await avacli.db.execute('INSERT INTO notes(body) VALUES(?1)', ['hello']);\n"
+                "// const {rows} = await avacli.db.query('SELECT * FROM notes');\n"
+                "</script>\n"
                 "</body>\n</html>";
 
             std::string fileId = generateId();
@@ -280,11 +305,40 @@ void registerAppRoutes(httplib::Server& svr, ServerContext ctx) {
     });
 
     svr.Delete(R"(/api/apps/([^/]+))", [ctx](const httplib::Request& req, httplib::Response& res) {
-        std::string id = req.matches[1];
+        std::string ref = req.matches[1];
         try {
+            // Accept either the opaque ID or the slug. This is the usual
+            // UX hot-spot: CLI + UI both tend to reach for the slug first.
+            auto row = Database::instance().queryOne(
+                "SELECT id, slug FROM apps WHERE id = ?1 OR slug = ?1", {ref});
+            if (row.is_null()) {
+                res.status = 404;
+                res.set_content(R"({"error":"app not found"})", "application/json");
+                return;
+            }
+            std::string id = row.value("id", "");
+            std::string slug = row.value("slug", "");
+
             Database::instance().execute("DELETE FROM app_files WHERE app_id = ?1", {id});
+            Database::instance().execute("DELETE FROM app_usage WHERE app_id = ?1", {id});
             Database::instance().execute("DELETE FROM apps WHERE id = ?1", {id});
-            LogBuffer::instance().info("apps", "App deleted", {{"id", id}});
+
+            // Close + remove the per-app SQLite file. Best-effort —
+            // a leftover file is not a functional problem, but we clean
+            // up for tidiness. The -wal / -shm sidecar files go too.
+            if (!slug.empty()) {
+                AppDatabase::evict(slug);
+                try {
+                    auto root = fs::path(userHomeDirectoryOrFallback()) / ".avacli" / "app_data";
+                    auto dbFile = root / (slug + ".db");
+                    std::error_code ec;
+                    fs::remove(dbFile, ec);
+                    fs::remove(root / (slug + ".db-wal"), ec);
+                    fs::remove(root / (slug + ".db-shm"), ec);
+                } catch (...) {}
+            }
+
+            LogBuffer::instance().info("apps", "App deleted", {{"id", id}, {"slug", slug}});
             res.set_content(R"({"deleted":true})", "application/json");
         } catch (const std::exception& e) {
             res.status = 500;
@@ -380,6 +434,79 @@ void registerAppRoutes(httplib::Server& svr, ServerContext ctx) {
                 "DELETE FROM app_files WHERE app_id = ?1 AND filename = ?2",
                 {appId, filename});
             res.set_content(R"({"deleted":true})", "application/json");
+        } catch (const std::exception& e) {
+            res.status = 500;
+            res.set_content(nlohmann::json({{"error", e.what()}}).dump(), "application/json");
+        }
+    });
+
+    // Phase 3: reveal / rotate the per-app agent_token. Admin-gated via
+    // the master-key middleware like every other /api/apps/:id route.
+    svr.Get(R"(/api/apps/([^/]+)/token)", [ctx](const httplib::Request& req, httplib::Response& res) {
+        std::string id = req.matches[1];
+        try {
+            std::string tok = AppTokens::ensureForAppId(id);
+            nlohmann::json out;
+            out["app_id"] = id;
+            out["agent_token"] = tok;
+            res.set_content(out.dump(), "application/json");
+        } catch (const std::exception& e) {
+            res.status = 500;
+            res.set_content(nlohmann::json({{"error", e.what()}}).dump(), "application/json");
+        }
+    });
+
+    svr.Post(R"(/api/apps/([^/]+)/token/rotate)", [ctx](const httplib::Request& req, httplib::Response& res) {
+        std::string id = req.matches[1];
+        try {
+            std::string fresh = AppTokens::generateToken();
+            Database::instance().execute("UPDATE apps SET agent_token = ?1 WHERE id = ?2",
+                {fresh, id});
+            LogBuffer::instance().info("apps", "agent_token rotated", {{"id", id}});
+            nlohmann::json out;
+            out["app_id"] = id;
+            out["agent_token"] = fresh;
+            res.set_content(out.dump(), "application/json");
+        } catch (const std::exception& e) {
+            res.status = 500;
+            res.set_content(nlohmann::json({{"error", e.what()}}).dump(), "application/json");
+        }
+    });
+
+    // Phase 3: per-app DB size cap override. `mb=0` clears the override
+    // (resort to global default). Validates against the same bounds as the
+    // global setting.
+    svr.Put(R"(/api/apps/([^/]+)/db-cap)", [ctx](const httplib::Request& req, httplib::Response& res) {
+        std::string id = req.matches[1];
+        nlohmann::json body;
+        try { body = nlohmann::json::parse(req.body); } catch (...) {
+            res.status = 400;
+            res.set_content(R"({"error":"invalid JSON"})", "application/json");
+            return;
+        }
+        if (!body.contains("mb") || !body["mb"].is_number_integer()) {
+            res.status = 400;
+            res.set_content(R"({"error":"mb (integer) required"})", "application/json");
+            return;
+        }
+        int mb = body["mb"].get<int>();
+        // 0 is the "inherit global" sentinel; only non-zero values must pass
+        // the range check.
+        if (mb != 0) {
+            try {
+                mb = platformSettings::validateAppsDbSizeCapMb(mb);
+            } catch (const std::exception& e) {
+                res.status = 400;
+                res.set_content(nlohmann::json({{"error", e.what()}}).dump(), "application/json");
+                return;
+            }
+        }
+        try {
+            Database::instance().execute(
+                "UPDATE apps SET db_size_cap_mb = ?1, updated_at = ?2 WHERE id = ?3",
+                {std::to_string(mb), std::to_string(nowMs()), id});
+            res.set_content(nlohmann::json({{"id", id}, {"db_size_cap_mb", mb}}).dump(),
+                            "application/json");
         } catch (const std::exception& e) {
             res.status = 500;
             res.set_content(nlohmann::json({{"error", e.what()}}).dump(), "application/json");

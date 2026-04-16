@@ -1,4 +1,4 @@
-VERSION ?= 2.0.0
+VERSION ?= 2.2.0
 ARCH ?= $(shell dpkg --print-architecture 2>/dev/null || echo amd64)
 UARCH ?= $(shell uname -m)
 BINARY ?= ../build/avacli
