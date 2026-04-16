@@ -4,6 +4,7 @@
 #include <spdlog/spdlog.h>
 #include <chrono>
 #include <thread>
+#include <unistd.h>
 
 namespace avacli {
 
