@@ -29,6 +29,9 @@ Section: devel
 Priority: optional
 Architecture: $ARCH
 Depends: libcurl4 (>= 7.68.0), libssl3 | libssl1.1
+Replaces: avalynnai (<< 2.0.0)
+Conflicts: avalynnai (<< 2.0.0)
+Provides: avalynnai
 Maintainer: iBerry420
 Homepage: https://github.com/iBerry420/acos
 Description: avacli (open source) - Single-binary autonomous AI agent platform powered by xAI Grok.
