@@ -61,7 +61,7 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
     svr.Get("/api/health", [ctx](const httplib::Request&, httplib::Response& res) {
         nlohmann::json j;
         j["status"] = "ok";
-        j["version"] = "2.1.0";
+        j["version"] = "2.3.0";
         j["workspace"] = ctx.config ? ctx.config->workspace : "";
         j["uptime_s"] = 0; // TODO: track real uptime
         j["port"] = ctx.actualPort ? *ctx.actualPort : 0;
