@@ -270,6 +270,22 @@ void HttpServer::setupRoutes() {
         }
         res.set_content(getIndexHtml(), "text/html");
     });
+
+    svr.set_logger([](const httplib::Request& req, const httplib::Response& res) {
+        if (res.status < 400) return;
+        if (req.path == "/favicon.ico") return;
+        if (req.path.rfind("/ui/", 0) == 0 && res.status == 404) return;
+        const std::string& path = req.path;
+        std::string msg = req.method + std::string(" ") + path + " -> HTTP " + std::to_string(res.status);
+        nlohmann::json details;
+        details["status"] = res.status;
+        details["method"] = req.method;
+        details["path"] = path;
+        if (res.status >= 500)
+            LogBuffer::instance().error("http", msg, details);
+        else if (path.rfind("/api/", 0) == 0 || res.status == 401 || res.status == 403)
+            LogBuffer::instance().warn("http", msg, details);
+    });
 }
 
 void HttpServer::handleChat() {}

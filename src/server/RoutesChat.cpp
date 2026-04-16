@@ -275,6 +275,16 @@ void registerChatRoutes(httplib::Server& svr, ServerContext ctx) {
                 bool success = !resultJson.contains("error");
                 auto urls = nlohmann::json::array();
 
+                if (!success) {
+                    try {
+                        LogBuffer::instance().error(
+                            "chat", "Media generation failed",
+                            {{"model", model},
+                             {"tool", toolName},
+                             {"error", resultJson.value("error", result)}});
+                    } catch (...) {}
+                }
+
                 if (success) {
                     if (resultJson.contains("images") && resultJson["images"].is_array()) {
                         for (const auto& img : resultJson["images"])

@@ -1,4 +1,5 @@
 #include "server/ServerHelpers.hpp"
+#include "server/LogBuffer.hpp"
 #include "config/ApiKeyStorage.hpp"
 #include "config/ServeSettings.hpp"
 #include "config/VaultStorage.hpp"
@@ -111,6 +112,15 @@ void appendUsageRecord(const nlohmann::json& record) {
 
     std::ofstream f(path);
     f << arr.dump();
+
+    try {
+        LogBuffer::instance().info("usage", "Token usage recorded",
+                                   {{"model", record.value("model", "")},
+                                    {"session", record.value("session", "")},
+                                    {"prompt_tokens", record.value("prompt_tokens", 0)},
+                                    {"completion_tokens", record.value("completion_tokens", 0)},
+                                    {"billing", record.value("billing", "")}});
+    } catch (...) {}
 }
 
 nlohmann::json loadUsageHistory(int days, int hours) {

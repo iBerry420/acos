@@ -58,6 +58,23 @@ find_package(OpenSSL REQUIRED)
 find_package(SQLite3 REQUIRED)
 
 # Source files
+# Build id for /api/status (git short hash when available)
+set(AVACLI_BUILD_ID "unknown")
+find_package(Git QUIET)
+if(GIT_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+  execute_process(
+    COMMAND "${GIT_EXECUTABLE}" rev-parse --short=10 HEAD
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    OUTPUT_VARIABLE AVACLI_BUILD_ID
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+endif()
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build_info.h.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/build_info.h"
+  @ONLY)
+
 set(SOURCES
   src/main.cpp
   src/config/ApiKeyStorage.cpp
@@ -108,6 +125,7 @@ add_executable(avacli ${SOURCES})
 target_include_directories(avacli PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_BINARY_DIR}/generated
   ${spdlog_SOURCE_DIR}/include
 )
 

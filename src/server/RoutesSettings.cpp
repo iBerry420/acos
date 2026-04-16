@@ -2,6 +2,7 @@
 #include "server/ServerContext.hpp"
 #include "server/ServerHelpers.hpp"
 #include "server/LogBuffer.hpp"
+#include "build_info.h"
 #include "config/ModelRegistry.hpp"
 #include "config/ServeSettings.hpp"
 #include "services/RelayManager.hpp"
@@ -33,6 +34,7 @@ void registerSettingsRoutes(httplib::Server& svr, ServerContext ctx) {
         j["node_role"] = ctx.config->nodeRole;
         j["relay_server"] = ctx.config->relayServer;
         j["has_relay_token"] = !ctx.config->relayToken.empty();
+        j["build"] = std::string(AVACLI_BUILD_ID);
         res.set_content(j.dump(), "application/json");
     });
 

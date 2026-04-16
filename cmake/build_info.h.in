@@ -1,0 +1,2 @@
+#pragma once
+#define AVACLI_BUILD_ID "@AVACLI_BUILD_ID@"

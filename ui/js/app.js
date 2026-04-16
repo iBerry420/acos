@@ -72,7 +72,8 @@ maxOutputTokens:parseInt(localStorage.getItem('ava_max_output_tokens'))||0,
 contextTokenLimit:parseInt(localStorage.getItem('ava_context_token_limit'))||0,
 reasoningEffort:localStorage.getItem('ava_reasoning_effort')||'high',
 lastTokenUsage:null,
-toolLog:[]
+toolLog:[],
+nodesPanelOpen:(function(){try{var v=localStorage.getItem('ava_chat_nodes_panel');if(v==='0')return false;if(v==='1')return true;}catch(e){}return false;}())
 };
 window.setModelFromSelect=function(el){
 if(!el||typeof el.value!=='string')return;
@@ -85,6 +86,7 @@ setTimeout(function(){scrollToBottom(true);},120);
 };
 var chatAbort=null,autoScroll=true,rafPending=false;
 var expandedDirs={},treePaths=[];
+var fileExplorerRoot='';
 var openPopover=null;
 
 /* ── Utilities ────────────────────────────────────────── */
@@ -120,14 +122,17 @@ opts=opts||{};
 var danger=opts.danger!==false;
 var title=opts.title||'Confirm';
 var okText=opts.okText||(danger?'Delete':'Confirm');
+var cancelText=opts.cancelText||'Cancel';
 var root=document.getElementById('avaModal');if(!root)return;
 root.innerHTML='<div class="ava-modal-backdrop" onclick="if(event.target===this)avaCloseModal()"><div class="ava-modal">'+
 '<div class="ava-modal-head">'+esc(title)+'</div>'+
 '<div class="ava-modal-body">'+esc(msg)+'</div>'+
-'<div class="ava-modal-foot"><button class="ava-modal-cancel" onclick="avaCloseModal()">Cancel</button>'+
+'<div class="ava-modal-foot"><button class="ava-modal-cancel" id="avaModalCancel">'+esc(cancelText)+'</button>'+
 '<button class="'+(danger?'ava-modal-danger':'ava-modal-ok')+'" id="avaModalOk">'+esc(okText)+'</button></div></div></div>';
 var okBtn=document.getElementById('avaModalOk');
+var cBtn=document.getElementById('avaModalCancel');
 if(okBtn)okBtn.onclick=function(){avaCloseModal();if(onOk)onOk();};
+if(cBtn)cBtn.onclick=function(){avaCloseModal();if(opts.onCancel)opts.onCancel();};
 setTimeout(function(){var bd=root.querySelector('.ava-modal-backdrop');if(bd)bd.classList.add('show');},10);
 }
 window.avaConfirm=avaConfirm;
@@ -192,6 +197,7 @@ r=r.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
 r=r.replace(/\*([^*]+)\*/g,'<em>$1</em>');
 r=r.replace(/~~(.+?)~~/g,'<del>$1</del>');
 r=r.replace(/\[([^\]]+)\]\(([^)]*)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+r=r.replace(/@([^\s@<>&]+)/g,'<span class="md-mention">@$1</span>');
 return r;
 }
 function closeList(){if(inUl){html+='</ul>';inUl=false;}if(inOl){html+='</ol>';inOl=false;}}
@@ -905,12 +911,26 @@ app.className='app';
 app.innerHTML=
 '<div id="sbOverlay" class="sb-overlay'+(S.sidebarOpen?' open':'')+'" onclick="closeSidebar()"></div>'+
 '<nav id="sidebar" class="sidebar'+(S.sidebarOpen?' open':'')+'">'+renderSidebar()+'</nav>'+
-'<main id="main" class="main">'+renderPage()+'</main>';
+'<div class="app-main-col">'+
+'<main id="main" class="main">'+renderPage()+'</main>'+
+'</div>';
+updateStatusFooter();
 if(S.route==='/'||S.route==='/chat')setupChat();
 if(S.route==='/files')setupIdeAfterRender();
 if(S.route==='/servers')loadServers();
 if(S.route==='/system')setupSystemPage();
 }
+
+function updateStatusFooter(){
+var el=document.getElementById('sbFootMeta');if(!el)return;
+var ws=S.status&&S.status.workspace?String(S.status.workspace):'—';
+var full=ws;
+if(ws.length>40){ws=ws.slice(0,38)+'…';}
+var b=(S.status&&S.status.build)?String(S.status.build):(typeof S.build==='string'&&S.build?S.build:'—');
+el.innerHTML='<div class="sb-foot-ws" title="'+esc(full)+'">'+ic('folder',10)+' '+esc(ws)+'</div>'+
+'<div class="sb-foot-build">'+ic('tag',10)+' build '+esc(b)+'</div>';
+}
+window.updateStatusFooter=updateStatusFooter;
 
 function renderSidebar(){
 var links=[
@@ -942,6 +962,7 @@ return '<div class="sb-head"><span class="sb-logo">Avacli</span><button class="s
 '<div>Model: <span title="'+esc(S.model)+'">'+esc(modelShort)+'</span></div>'+
 '<div>'+connDot+'</div>'+
 '<div>Status: <span style="color:'+stColor+'">'+ic('dot',8)+' '+stText+'</span></div>'+
+'<div id="sbFootMeta" class="sb-foot-meta"></div>'+
 '</div>';
 }
 
@@ -1085,7 +1106,7 @@ return '<div class="toolbar">'+
 '</div>'+
 '<div class="toolbar-spacer"></div>'+
 '<div class="toolbar-group toolbar-nodes-btn">'+
-'<button class="toolbar-btn" onclick="toggleNodesPanel()" title="Nodes">'+ic('server',15)+' <span>Nodes</span></button>'+
+'<button class="toolbar-btn'+(S.nodesPanelOpen?' active':'')+'" onclick="toggleNodesPanel()" title="Nodes panel">'+ic('server',15)+' <span>Nodes</span></button>'+
 '</div>'+
 '<div class="toolbar-group" style="position:relative">'+
 '<button class="toolbar-btn" onclick="avaOpenToolbarPopover(event,\'inputSettingsPop\')" title="Chat Settings">'+ic('gear',15)+' <span>'+(function(){var m=getModelMeta(S.model);return m?(m.name||m.id).split('-').slice(0,3).join('-'):'Model';})()+' '+ic('chevD',10)+'</span></button>'+
@@ -1728,6 +1749,9 @@ img.onerror=function(){URL.revokeObjectURL(url);toast('PNG export failed - try z
 img.src=url;
 };
 window.chatKey=function(e){
+if(S.mentionActive&&S.mentionMatches&&S.mentionMatches.length){
+if(e.key==='Enter'||e.key==='Tab'||e.key==='ArrowDown'||e.key==='ArrowUp'||e.key==='Escape')return;
+}
 var ctrlSend=S.ctrlEnterSend!==false;
 if(ctrlSend){if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();sendMsg();}}
 else{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();}}
@@ -2382,12 +2406,13 @@ restoreToolbarPopover('notesPop');
 };
 
 /* ── Nodes Panel ──────────────────────────────────────── */
-S.nodesList=[];S.nodesLoaded=false;S.nodesPanelOpen=false;S.mentionActive=false;S.mentionIdx=0;S.activeNodeId=null;
+S.nodesList=[];S.nodesLoaded=false;S.mentionActive=false;S.mentionIdx=0;S.activeNodeId=null;
 
 function renderNodesPanel(){
 var h='<div class="nodes-panel'+(S.nodesPanelOpen?' open':'')+'" id="nodesPanel">';
-h+='<div class="nodes-panel-head"><span>'+ic('server',14)+' Nodes</span>';
-h+='<button class="node-action-btn" onclick="refreshNodes()" title="Refresh">'+ic('refresh',14)+'</button></div>';
+h+='<div class="nodes-panel-head"><span>'+ic('server',14)+' Nodes</span><span class="nodes-panel-head-actions">';
+h+='<button class="node-action-btn" onclick="refreshNodes()" title="Refresh">'+ic('refresh',14)+'</button>';
+h+='<button class="node-action-btn" onclick="toggleNodesPanel()" title="Hide nodes">'+ic('xic',14)+'</button></span></div>';
 h+='<div class="nodes-panel-list" id="nodesPanelList">';
 h+='<div class="node-item self" onclick="go(\'/servers\')"><div class="node-dot online"></div>';
 h+='<div class="node-info"><div class="node-label">'+ic('dot',8)+' Local</div>';
@@ -2448,8 +2473,11 @@ items.forEach(function(el){el.classList.toggle('active',el.getAttribute('data-no
 
 window.toggleNodesPanel=function(){
 S.nodesPanelOpen=!S.nodesPanelOpen;
+try{localStorage.setItem('ava_chat_nodes_panel',S.nodesPanelOpen?'1':'0');}catch(x){}
 var panel=document.getElementById('nodesPanel');
 if(panel)panel.classList.toggle('open',S.nodesPanelOpen);
+var tb=document.querySelector('.toolbar-nodes-btn .toolbar-btn');
+if(tb)tb.classList.toggle('active',S.nodesPanelOpen);
 };
 
 /* ── @mention picker ─────────────────────────────────── */
@@ -2462,7 +2490,8 @@ var val=inp.value;
 var cursor=inp.selectionStart;
 var before=val.substring(0,cursor);
 var atIdx=before.lastIndexOf('@');
-if(atIdx<0||atIdx>0&&before[atIdx-1]!==' '&&before[atIdx-1]!=='\n'){
+var prevCh=atIdx>0?before.charAt(atIdx-1):'';
+if(atIdx<0||(prevCh!==' '&&prevCh!=='\n'&&prevCh!=='\t'&&atIdx!==0)){
 popup.classList.remove('show');S.mentionActive=false;return;
 }
 var query=before.substring(atIdx+1).toLowerCase();
@@ -2510,7 +2539,8 @@ var val=inp.value;
 var cursor=inp.selectionStart;
 var before=val.substring(0,S.mentionAtIdx);
 var after=val.substring(cursor);
-var tag='@'+node.label+' ';
+var label=(node.label||node.ip||'').trim();
+var tag='@'+label+' ';
 inp.value=before+tag+after;
 inp.selectionStart=inp.selectionEnd=before.length+tag.length;
 inp.focus();
@@ -2661,6 +2691,12 @@ return '<div class="files-wrap" style="height:100%;position:relative">'+
 '<span>'+ic('folder',14)+' Explorer</span>'+
 '<button style="background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px;display:flex;align-items:center;gap:4px" onclick="browseWorkspace()" title="Browse folder">'+ic('folder',12)+' Browse</button>'+
 '</div>'+
+'<div style="padding:.35rem .75rem;border-bottom:1px solid var(--border);font-size:.6875rem;color:var(--text-muted);display:flex;align-items:center;justify-content:space-between;gap:.35rem">'+
+(fileExplorerRoot
+?'<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0" title="'+esc(fileExplorerRoot)+'">'+ic('chevR',12)+' <span style="font-family:var(--mono);color:var(--accent-pale)">'+esc(fileExplorerRoot)+'</span></span>'+
+'<button type="button" class="btn-ghost" style="flex-shrink:0;padding:.15rem .45rem;font-size:.625rem" onclick="clearFileExplorerRoot()">All files</button>'
+:'<span style="font-family:var(--mono);opacity:.85">Workspace root</span>')+
+'</div>'+
 '<div id="treeRoot" style="padding:.25rem;overflow-y:auto;flex:1"></div>'+
 '</div>'+
 '<div class="file-view" style="display:flex;flex-direction:column;flex:1;overflow:hidden;padding:0">'+
@@ -2707,8 +2743,19 @@ return '<div class="ide-header" style="display:flex;align-items:center;justify-c
 '</div>';
 }
 
+function expandDirChain(chain,idx){
+if(!chain||!chain.length)return;
+if(idx>=chain.length){
+if(typeof openFileTree==='function')openFileTree();
+return;
+}
+expandedDirs[chain[idx]]=true;
+if(!dirCache[chain[idx]]){
+loadDir(chain[idx],function(){renderFileTree();expandDirChain(chain,idx+1);});
+}else{renderFileTree();expandDirChain(chain,idx+1);}
+}
+
 function setupIdeAfterRender(){
-renderFileTree();
 if(window._pendingAppDir){
 var targetDir=window._pendingAppDir;
 var parts=targetDir.split('/');
@@ -2719,19 +2766,9 @@ expanding=expanding?(expanding+'/'+parts[i]):parts[i];
 chain.push(expanding);
 }
 delete window._pendingAppDir;
-function expandNext(idx){
-if(idx>=chain.length){
-if(typeof openFileTree==='function')openFileTree();
-return;
+window._pendingExpandChain=chain;
 }
-expandedDirs[chain[idx]]=true;
-if(!dirCache[chain[idx]]){
-loadDir(chain[idx],function(){renderFileTree();expandNext(idx+1);});
-}else{renderFileTree();expandNext(idx+1);}
-}
-if(!dirCache['']){loadDir('',function(){renderFileTree();expandNext(0);});}
-else expandNext(0);
-}
+renderFileTree();
 var ta=document.getElementById('ideTextarea');
 if(ta){
 ta.addEventListener('keydown',function(e){
@@ -2744,13 +2781,34 @@ if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();ideSave();}
 function renderFileTree(){
 var root=document.getElementById('treeRoot');
 if(!root)return;
-if(!dirCache['']){
+var treeBase=(typeof fileExplorerRoot==='string'&&fileExplorerRoot)?fileExplorerRoot:'';
+if(!dirCache[treeBase]){
 root.innerHTML='<div style="display:flex;justify-content:center;padding:1rem"><div class="spinner"></div></div>';
-loadDir('',function(){renderFileTree();});
+loadDir(treeBase,function(){
+renderFileTree();
+if(treeBase===''&&window._pendingExpandChain){
+var chain=window._pendingExpandChain;
+delete window._pendingExpandChain;
+expandDirChain(chain,0);
+}
+});
 return;
 }
-root.innerHTML=renderDirEntries('');
+root.innerHTML=renderDirEntries(treeBase);
+if(treeBase===''&&window._pendingExpandChain){
+var chain2=window._pendingExpandChain;
+delete window._pendingExpandChain;
+expandDirChain(chain2,0);
 }
+}
+
+window.clearFileExplorerRoot=function(){
+fileExplorerRoot='';
+dirCache={};
+loadingDirs={};
+expandedDirs={};
+render();
+};
 
 function loadDir(dir,cb){
 if(loadingDirs[dir])return;
@@ -4055,16 +4113,24 @@ var h='<div class="set-section"><h3>'+ic('globe',16)+' Node Role</h3>'+
 if(role==='client'){
 h+='<div class="set-row"><span class="set-label">Server URL</span>'+
 '<input class="set-input" id="relayServerInput" value="'+esc(S.relayServer||'')+'" placeholder="https://devacos.avalynn.ai"></div>'+
-'<div class="set-row"><span class="set-label">Relay Token</span>'+
-'<input class="set-input" id="relayTokenInput" type="password" placeholder="Shared relay token"></div>'+
+'<div class="set-row" style="align-items:flex-start;flex-wrap:wrap"><span class="set-label" style="padding-top:.35rem">Relay Token</span>'+
+'<div style="display:flex;gap:.35rem;flex:1;min-width:200px;flex-wrap:wrap;justify-content:flex-end;align-items:center">'+
+'<input class="set-input" id="relayTokenInput" type="password" placeholder="Shared relay token" style="min-width:160px;flex:1;max-width:100%">'+
+'<button type="button" class="btn-sm" onclick="generateRelayToken()" title="Generate random token">'+ic('zap',12)+'</button>'+
+'<button type="button" class="btn-sm" onclick="copyRelayTokenInput()" title="Copy to clipboard">'+ic('copy',12)+'</button>'+
+'</div></div>'+
 '<div class="set-row"><span class="set-label">Status</span>'+
 '<span class="set-value" id="relayClientStatus">'+
 (S.hasRelayToken?'<span style="color:#4ade80">Token configured</span>':'<span style="color:#f87171">No token set</span>')+
 '</span></div>'+
 '<button class="btn-sm" onclick="saveRelaySettings()" style="margin-top:.5rem">'+ic('save',12)+' Save Relay Settings</button>';
 } else if(role==='server'){
-h+='<div class="set-row"><span class="set-label">Accept Token</span>'+
-'<input class="set-input" id="relayTokenInput" type="password" placeholder="Token that clients must present" value=""></div>'+
+h+='<div class="set-row" style="align-items:flex-start;flex-wrap:wrap"><span class="set-label" style="padding-top:.35rem">Accept Token</span>'+
+'<div style="display:flex;gap:.35rem;flex:1;min-width:200px;flex-wrap:wrap;justify-content:flex-end;align-items:center">'+
+'<input class="set-input" id="relayTokenInput" type="password" placeholder="Token that clients must present" value="" style="min-width:160px;flex:1;max-width:100%">'+
+'<button type="button" class="btn-sm" onclick="generateRelayToken()" title="Generate random token">'+ic('zap',12)+'</button>'+
+'<button type="button" class="btn-sm" onclick="copyRelayTokenInput()" title="Copy to clipboard">'+ic('copy',12)+'</button>'+
+'</div></div>'+
 '<div class="set-row"><span class="set-label">Connected Clients</span>'+
 '<span class="set-value" id="relayClientCount">…</span></div>'+
 '<button class="btn-sm" onclick="saveRelaySettings()" style="margin-top:.5rem">'+ic('save',12)+' Save Relay Settings</button>';
@@ -4098,6 +4164,20 @@ if(body.relay_server!==undefined)S.relayServer=body.relay_server;
 if(body.relay_token)S.hasRelayToken=true;
 render();
 }).catch(function(e){toast('Error: '+(e.message||'failed'),'error');});
+};
+window.generateRelayToken=function(){
+var el=document.getElementById('relayTokenInput');if(!el)return;
+if(!window.crypto||!window.crypto.getRandomValues){toast('Secure token generation not supported in this browser','error');return;}
+var a=new Uint8Array(24);window.crypto.getRandomValues(a);
+var hex='';
+for(var i=0;i<a.length;i++){hex+=('0'+a[i].toString(16)).slice(-2);}
+el.type='text';
+el.value=hex;
+toast('New token generated — save relay settings','info');
+};
+window.copyRelayTokenInput=function(){
+var el=document.getElementById('relayTokenInput');if(!el||!el.value){toast('Nothing to copy','error');return;}
+navigator.clipboard.writeText(el.value).then(function(){toast('Copied','success');}).catch(function(){toast('Copy failed','error');});
 };
 
 window.clearStoredXaiKey=function(){
@@ -4359,8 +4439,9 @@ for(var i=0;i<appsState.apps.length;i++){
 var a=appsState.apps[i];
 var col=appColor(a.name||'');
 var ini=(a.name||'A').charAt(0).toUpperCase();
-var iconHtml=a.icon_url
-  ?'<img class="app-drawer-icon-img" src="'+esc(a.icon_url)+'" alt="">'
+var iconSrc=a.icon_url?(a.icon_url+(a.icon_url.indexOf('?')<0?'?':'&')+'v='+(a.updated_at||'')):'';
+var iconHtml=iconSrc
+  ?'<img class="app-drawer-icon-img" src="'+esc(iconSrc)+'" alt="">'
   :'<div class="app-drawer-icon-letter" style="background:linear-gradient(135deg,'+col+','+col+'99)">'+ini+'</div>';
 grid+='<div class="app-drawer-item" data-appid="'+esc(a.id)+'" data-slug="'+esc(a.slug)+'"'+
 ' oncontextmenu="appCtx(event,\''+esc(a.id)+'\')"'+
@@ -4373,7 +4454,7 @@ grid+='<div class="app-drawer-item" data-appid="'+esc(a.id)+'" data-slug="'+esc(
 grid+='</div>';
 }
 
-return '<div class="usage-wrap" style="padding:1.5rem">'+
+return '<div class="usage-wrap apps-page-wrap" style="padding:1.5rem;max-width:none;width:100%">'+
 '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem">'+
 '<h2 style="font-size:1.25rem;color:var(--accent-pale);margin:0">'+ic('grid',18)+' Apps</h2>'+
 '<button class="btn-deploy" onclick="createNewApp()">'+ic('plus',14)+' New App</button>'+
@@ -4412,7 +4493,7 @@ var items=[
 {ic:'code',l:'Edit in Files',fn:'editAppFiles(\''+esc(app.id)+'\',\''+esc(app.slug)+'\')'},
 {sep:true},
 {ic:'edit',l:'Rename',fn:'renameApp(\''+esc(app.id)+'\',\''+safeName+'\')'},
-{ic:'image',l:'Generate Icon',fn:'genAppIcon(\''+esc(app.id)+'\',\''+safeName+'\')'},
+{ic:'image',l:'Manage Icon',fn:'manageAppIcon(\''+esc(app.id)+'\',\''+safeName+'\')'},
 {sep:true},
 {ic:'trash',l:'Delete',fn:'deleteApp(\''+esc(app.id)+'\')',danger:true}
 ];
@@ -4442,24 +4523,69 @@ window.genAppIcon=function(id,name){
 avaPrompt('Describe the icon you want:','A modern minimalist app icon for '+name,function(desc){
 if(!desc||!desc.trim())return;
 toast('Generating icon...','info');
-api('/api/apps/'+encodeURIComponent(id)+'/generate-icon',{method:'POST',body:{prompt:desc.trim(),model:S.mediaModel||'',size:'1024x1024'}}).then(function(d){
+api('/api/apps/'+encodeURIComponent(id)+'/generate-icon',{method:'POST',body:{prompt:desc.trim(),model:S.mediaModel||'',resolution:'1k',aspect_ratio:'1:1'}}).then(function(d){
 if(d&&d.icon_url){toast('Icon set!','success');appsState.apps=null;render();}
 else toast('No image returned','error');
 }).catch(function(e){toast('Failed: '+(e.message||'error'),'error');});
 },{title:'Generate App Icon',okText:'Generate'});
 };
 
+window.manageAppIcon=function(id,name){
+var el=document.getElementById('avaModal');if(!el)return;
+api('/api/assets',{silent:true}).then(function(arr){
+var images=(Array.isArray(arr)?arr:[]).filter(function(a){return a.type==='image';});
+_showIconPickerModal(el,id,name,images);
+}).catch(function(){_showIconPickerModal(el,id,name,[]);});
+};
+function _showIconPickerModal(el,id,name,images){
+var safeId=esc(id),safeName=esc(name).replace(/'/g,"\\'");
+var h='<div class="ava-modal-backdrop" onclick="closeAvaModal()"></div>';
+h+='<div class="ava-modal-box" style="max-width:560px">';
+h+='<div class="ava-modal-title">'+ic('image',16)+' Manage Icon — '+esc(name)+'</div>';
+h+='<div style="padding:0 1.25rem .75rem"><button class="ava-btn ava-btn-ok" onclick="closeAvaModal();genAppIcon(\''+safeId+'\',\''+safeName+'\')">'+ic('zap',14)+' Generate with AI</button></div>';
+if(images.length){
+h+='<div style="padding:0 1.25rem .5rem;font-size:.75rem;color:var(--text-secondary)">Or pick from your uploaded assets:</div>';
+h+='<div class="icon-picker-grid">';
+for(var i=0;i<images.length;i++){
+var a=images[i];
+h+='<div class="icon-picker-item" onclick="pickAppIcon(\''+safeId+'\',\''+esc(a.url).replace(/'/g,"\\'")+'\')" title="'+esc(a.filename||'')+'">';
+h+='<img src="'+(a.thumb_url||a.url)+'" loading="lazy">';
+h+='</div>';
+}
+h+='</div>';
+}else{
+h+='<div style="padding:0 1.25rem;color:var(--text-muted);font-size:.8125rem">No image assets yet. Upload images on the Assets page, or generate with AI above.</div>';
+}
+h+='<div class="ava-modal-actions"><button class="ava-btn" onclick="closeAvaModal()">Cancel</button></div>';
+h+='</div>';
+el.innerHTML=h;el.style.display='flex';
+}
+window.pickAppIcon=function(id,url){
+closeAvaModal();
+toast('Setting icon...','info');
+api('/api/apps/'+encodeURIComponent(id),{method:'PUT',body:{icon_url:url}}).then(function(){
+toast('Icon updated!','success');appsState.apps=null;render();
+}).catch(function(e){toast('Failed: '+(e.message||'error'),'error');});
+};
+window.closeAvaModal=function(){var el=document.getElementById('avaModal');if(el){el.innerHTML='';el.style.display='none';}};
+
 window.editAppFiles=function(id,slug){
 toast('Exporting to workspace...','info');
 api('/api/apps/'+encodeURIComponent(id)+'/export',{method:'POST'}).then(function(d){
-if(d&&(d.path||d.exported)){
+if(!(d&&(d.path||d.exported))){toast('Export returned no path','error');return;}
+var p=d.path||('apps/'+slug);
+function goFiles(focus){
 dirCache={};
-window._pendingAppDir=d.path||('apps/'+slug);
+loadingDirs={};
+expandedDirs={};
+if(focus)fileExplorerRoot=p;
+else fileExplorerRoot='';
 navigate('/files');
-toast('App files in '+(d.path||('apps/'+slug))+'/','success');
-}else{
-toast('Export returned no path','error');
+toast('App files in '+p+'/','success');
 }
+avaConfirm('Open Files for this app. Focus the explorer on "'+p+'" (you can return to the full workspace with "All files")?',
+function(){goFiles(true);},
+{title:'App exported',okText:'Focus app folder',cancelText:'Workspace only',danger:false,onCancel:function(){goFiles(false);}});
 }).catch(function(e){toast('Export failed: '+(e.message||'error'),'error');});
 };
 
@@ -5093,6 +5219,7 @@ if(d.media_model)S.mediaModel=d.media_model;
 if(d.node_role)S.nodeRole=d.node_role;
 if(d.relay_server)S.relayServer=d.relay_server;
 S.hasRelayToken=!!d.has_relay_token;
+if(d.build)S.build=d.build;
 }
 return api('/api/models',{silent:true});
 }).then(function(m){
@@ -5127,6 +5254,7 @@ statusPollTimer=setInterval(function(){
 api('/api/status',{silent:true}).then(function(d){
 if(!d)return;
 S.status=d;
+updateStatusFooter();
 var changed=false;
 if(d.model&&d.model!==S.model){
 S.model=d.model;

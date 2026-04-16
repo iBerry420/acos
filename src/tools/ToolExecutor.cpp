@@ -9,6 +9,7 @@
 #include "platform/Paths.hpp"
 #include "platform/PortableTime.hpp"
 #include "platform/ProcessRunner.hpp"
+#include "server/LogBuffer.hpp"
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 #include <curl/curl.h>
@@ -1224,6 +1225,13 @@ std::string ToolExecutor::execute(const std::string& name, const std::string& ar
 
             auto resp = httpPostJson("https://api.x.ai/v1/images/generations", body.dump(), apiKey);
             if (!resp.ok()) {
+                try {
+                    LogBuffer::instance().error(
+                        "xai", "images/generations failed",
+                        {{"status", resp.statusCode},
+                         {"model", model},
+                         {"body", resp.body.substr(0, 800)}});
+                } catch (...) {}
                 nlohmann::json j;
                 j["error"] = "API error (" + std::to_string(resp.statusCode) + "): " + resp.body.substr(0, 500);
                 return j.dump();
@@ -1283,6 +1291,13 @@ std::string ToolExecutor::execute(const std::string& name, const std::string& ar
 
             auto resp = httpPostJson("https://api.x.ai/v1/images/edits", body.dump(), apiKey);
             if (!resp.ok()) {
+                try {
+                    LogBuffer::instance().error(
+                        "xai", "images/edits failed",
+                        {{"status", resp.statusCode},
+                         {"model", model},
+                         {"body", resp.body.substr(0, 800)}});
+                } catch (...) {}
                 nlohmann::json j;
                 j["error"] = "API error (" + std::to_string(resp.statusCode) + "): " + resp.body.substr(0, 500);
                 return j.dump();

@@ -142,6 +142,15 @@ void MeshManager::syncWithPeers() {
                     "SELECT id FROM nodes WHERE id = ?1", {id});
                 if (existing.is_null()) {
                     try {
+                        auto removed = Database::instance().queryOne(
+                            "SELECT COUNT(*) AS c FROM mesh_events WHERE event_type = 'node_removed' "
+                            "AND node_id = ?1",
+                            {id});
+                        int removedCount = removed.is_null() ? 0 : removed.value("c", 0);
+                        if (removedCount > 0) {
+                            spdlog::debug("Mesh sync: skip re-adding user-removed node {}", id);
+                            continue;
+                        }
                         Database::instance().execute(
                             "INSERT INTO nodes (id, ip, port, domain, label, status, added_at) "
                             "VALUES (?1, ?2, ?3, ?4, ?5, 'unknown', ?6)",

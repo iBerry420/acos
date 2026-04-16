@@ -140,7 +140,7 @@ void registerAppRoutes(httplib::Server& svr, ServerContext ctx) {
     svr.Get("/api/apps", [ctx](const httplib::Request&, httplib::Response& res) {
         try {
             auto rows = Database::instance().query(
-                "SELECT id, name, description, slug, status, created_at, updated_at, created_by "
+                "SELECT id, name, description, slug, status, icon_url, created_at, updated_at, created_by "
                 "FROM apps ORDER BY updated_at DESC");
             nlohmann::json out;
             out["apps"] = rows;
@@ -453,13 +453,24 @@ void registerAppRoutes(httplib::Server& svr, ServerContext ctx) {
             std::string defaultMedia = ctx.config->mediaModel.empty() ? "grok-imagine-image" : ctx.config->mediaModel;
             std::string model = body.value("model", defaultMedia);
             if (model.empty()) model = defaultMedia;
-            std::string size = body.value("size", "1024x1024");
+            // xAI Imagine API uses resolution ("1k"/"2k") + aspect_ratio — not OpenAI-style "1024x1024" size.
+            std::string resolution = body.value("resolution", "");
+            std::string aspectRatio = body.value("aspect_ratio", "");
+            std::string sizeLegacy = body.value("size", "");
+            if (resolution != "1k" && resolution != "2k") resolution = "";
+            if (!sizeLegacy.empty() && resolution.empty()) {
+                resolution = "1k";
+                if (aspectRatio.empty()) aspectRatio = "1:1";
+            }
+            if (resolution.empty()) resolution = "1k";
+            if (aspectRatio.empty()) aspectRatio = "1:1";
 
             nlohmann::json reqBody;
             reqBody["model"] = model;
             reqBody["prompt"] = prompt;
             reqBody["n"] = 1;
-            reqBody["size"] = size;
+            reqBody["resolution"] = resolution;
+            reqBody["aspect_ratio"] = aspectRatio;
             reqBody["response_format"] = "url";
 
             auto resp = curlPostJson("https://api.x.ai/v1/images/generations", reqBody.dump(), apiKey);
