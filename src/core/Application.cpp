@@ -64,11 +64,16 @@ public:
         std::cout << j.dump() << "\n" << std::flush;
     }
 
-    void onUsage(size_t promptTokens, size_t completionTokens) {
+    void onUsage(const Usage& u) {
         nlohmann::json j;
         j["type"] = "usage";
-        j["prompt_tokens"] = promptTokens;
-        j["completion_tokens"] = completionTokens;
+        j["prompt_tokens"] = u.promptTokens;
+        j["completion_tokens"] = u.completionTokens;
+        j["cached_tokens"] = u.cachedPromptTokens;
+        j["reasoning_tokens"] = u.reasoningTokens;
+        j["billable_prompt_tokens"] = u.billablePromptTokens();
+        if (u.promptTokens > 0)
+            j["cache_hit_rate"] = u.cacheHitRatio();
         std::lock_guard<std::mutex> lock(mu_);
         std::cout << j.dump() << "\n" << std::flush;
     }
@@ -167,6 +172,19 @@ Application::Application(Config config)
         sessionData_.totalCompletionTokens = 0;
     }
 
+    // Mint a stable cache-routing key once per session. saveSession() persists it,
+    // so subsequent runs of the same --session reuse the same conv_id and keep
+    // hitting xAI's warm KV cache.
+    if (sessionData_.convId.empty()) {
+        sessionData_.convId = SessionManager::generateConvId();
+        spdlog::info("[Session] Minted conv_id {} for session '{}'",
+                     sessionData_.convId,
+                     config_.session.empty() ? "<ephemeral>" : config_.session);
+    } else {
+        spdlog::info("[Session] Reusing conv_id {} for session '{}'",
+                     sessionData_.convId, config_.session);
+    }
+
     tokenTracker_.addUsage(sessionData_.totalPromptTokens, sessionData_.totalCompletionTokens);
     ensureProjectNotesExist(config_.workspace);
     ensureTodosExist(config_.workspace);
@@ -180,6 +198,7 @@ Application::Application(Config config)
         config_.workspace, sessionData_.mode, nullptr);
     toolExecutor_->setSessionId(config_.session);
     toolExecutor_->setSearchModel(config_.model);
+    toolExecutor_->setConvId(sessionData_.convId);
     toolExecutor_->setModeChangeCallback([this](Mode m) {
         sessionData_.mode = m;
         if (toolExecutor_) toolExecutor_->setMode(m);
@@ -193,6 +212,11 @@ void Application::saveSession() {
     sessionData_.totalPromptTokens = tokenTracker_.promptTokens();
     sessionData_.totalCompletionTokens = tokenTracker_.completionTokens();
     loadTodosFromFile(config_.workspace, sessionData_.todos);
+    // Persist Responses API chain state so the next run skips re-sending history.
+    if (agentEngine_) {
+        sessionData_.lastResponseId = agentEngine_->lastResponseId();
+        sessionData_.lastSubmittedCount = agentEngine_->lastSubmittedCount();
+    }
     sessionMgr_.save(config_.session, sessionData_);
     spdlog::info("Session saved: {}", config_.session);
 }
@@ -242,6 +266,11 @@ int Application::runHeadless() {
             spdlog::info("[Mode] Switched to {}", modeToString(m));
         });
     agentEngine_->setVerboseToolOutput(config_.tuiVerbose);
+    agentEngine_->setConvId(sessionData_.convId);
+    // Seed Responses API chain state from disk so we can keep chaining across
+    // multiple headless invocations of the same session.
+    agentEngine_->setLastResponseId(sessionData_.lastResponseId);
+    agentEngine_->setLastSubmittedCount(sessionData_.lastSubmittedCount);
 
     if (streamJson) {
         agentEngine_->setToolStartCallback(
@@ -258,9 +287,10 @@ int Application::runHeadless() {
     auto tools = ToolRegistry::getToolsForMode(sessionData_.mode);
 
     auto onUsage = [this, streamJson, emitter](const Usage& u) {
-        tokenTracker_.addUsage(u.promptTokens, u.completionTokens);
+        tokenTracker_.addUsage(u.promptTokens, u.completionTokens,
+                               u.cachedPromptTokens, u.reasoningTokens);
         if (streamJson) {
-            emitter->onUsage(u.promptTokens, u.completionTokens);
+            emitter->onUsage(u);
         }
     };
 
@@ -283,6 +313,10 @@ int Application::runHeadless() {
         j["success"] = ok;
         j["prompt_tokens"] = tokenTracker_.promptTokens();
         j["completion_tokens"] = tokenTracker_.completionTokens();
+        j["cached_tokens"] = tokenTracker_.cachedPromptTokens();
+        j["reasoning_tokens"] = tokenTracker_.reasoningTokens();
+        j["billable_prompt_tokens"] = tokenTracker_.billablePromptTokens();
+        j["cache_hit_percent"] = tokenTracker_.cacheHitPercent();
         j["total_tokens"] = tokenTracker_.totalTokens();
         if (!config_.session.empty()) j["session"] = config_.session;
         std::cerr << j.dump(2) << "\n";

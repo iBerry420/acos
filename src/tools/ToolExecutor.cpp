@@ -2,6 +2,8 @@
 #include "tools/ToolRegistry.hpp"
 #include "tools/ProjectNotes.hpp"
 #include "agents/SubAgentManager.hpp"
+#include "client/BatchClient.hpp"
+#include "services/BatchPoller.hpp"
 #include "config/ApiKeyStorage.hpp"
 #include "config/VaultStorage.hpp"
 #include "config/ServeSettings.hpp"
@@ -2737,6 +2739,7 @@ std::string ToolExecutor::execute(const std::string& name, const std::string& ar
             opts.parentTaskId = subAgentTaskId_;
             opts.parentDepth = subAgentDepth_;
             opts.sessionId = sessionId_;
+            opts.parentConvId = convId_;
             opts.model = get("model");
 
             if (args.contains("allowed_paths") && args["allowed_paths"].is_array()) {
@@ -2788,9 +2791,16 @@ std::string ToolExecutor::execute(const std::string& name, const std::string& ar
             j["cancel_requested"] = rec.cancelRequested;
             if (!rec.error.empty()) j["error"] = rec.error;
             if (!rec.result.is_null()) j["result"] = rec.result;
-            j["usage"] = {
-                {"prompt_tokens", rec.promptTokens},
-                {"completion_tokens", rec.completionTokens}};
+            // Prefer the richer usage breakdown stored on the result (includes cached + reasoning
+            // tokens when the sub-agent touched xAI models with prompt caching enabled).
+            if (rec.result.is_object() && rec.result.contains("usage") &&
+                rec.result["usage"].is_object()) {
+                j["usage"] = rec.result["usage"];
+            } else {
+                j["usage"] = {
+                    {"prompt_tokens", rec.promptTokens},
+                    {"completion_tokens", rec.completionTokens}};
+            }
             return j.dump();
         }
 
@@ -2835,6 +2845,274 @@ std::string ToolExecutor::execute(const std::string& name, const std::string& ar
             j["subagents"] = arr;
             j["count"] = arr.size();
             j["max_depth"] = platformSettings::subagentsMaxDepth();
+            return j.dump();
+        }
+
+        // ── batch_submit ──────────────────────────────────────
+        // Queue a list of prompts through xAI's Batch API. Writes a row to
+        // the local `batches` table so the server-side poller picks up the
+        // job; the tool returns the batch_id plus the normalised request_ids
+        // the caller can later match results against.
+        if (name == "batch_submit") {
+            std::string batchName = get("name");
+            if (batchName.empty()) return R"({"error": "name required"})";
+            std::string kind = get("kind");
+            if (kind.empty()) kind = "user";
+            std::string defaultModel = get("model");
+
+            if (!args.contains("prompts") || !args["prompts"].is_array()
+                || args["prompts"].empty()) {
+                return R"ERR({"error": "prompts (non-empty array) required"})ERR";
+            }
+
+            std::string apiKey = resolvedXaiApiKey();
+            if (apiKey.empty()) return R"({"error": "XAI_API_KEY not set"})";
+
+            // Build the batch_requests envelope from the (friendlier) prompt
+            // shape the agent actually writes. We accept {system, user, model,
+            // max_tokens} and translate into xAI's chat_get_completion body.
+            std::vector<nlohmann::json> envelopes;
+            std::vector<std::string> rids;
+            envelopes.reserve(args["prompts"].size());
+            size_t idx = 0;
+            for (const auto& p : args["prompts"]) {
+                if (!p.is_object()) {
+                    return R"({"error": "prompts[] items must be objects"})";
+                }
+                std::string rid = p.value("id", std::string("req_") + std::to_string(idx));
+                std::string userText   = p.value("user", "");
+                std::string systemText = p.value("system", "");
+                std::string model      = p.value("model", defaultModel);
+                size_t      maxTokens  = p.value("max_tokens", static_cast<size_t>(0));
+                if (userText.empty() && !p.contains("messages")) {
+                    return R"({"error": "each prompt needs `user` or `messages`"})";
+                }
+                if (model.empty()) {
+                    return R"ERR({"error": "model required (top-level `model` or per-prompt)"})ERR";
+                }
+
+                nlohmann::json chatBody;
+                chatBody["model"] = model;
+                if (maxTokens > 0) chatBody["max_tokens"] = maxTokens;
+
+                if (p.contains("messages") && p["messages"].is_array()) {
+                    chatBody["messages"] = p["messages"];
+                } else {
+                    nlohmann::json msgs = nlohmann::json::array();
+                    if (!systemText.empty())
+                        msgs.push_back({{"role","system"}, {"content", systemText}});
+                    msgs.push_back({{"role","user"}, {"content", userText}});
+                    chatBody["messages"] = msgs;
+                }
+
+                envelopes.push_back(BatchClient::makeChatRequest(rid, chatBody));
+                rids.push_back(rid);
+                ++idx;
+            }
+
+            BatchClient client(apiKey);
+            std::string batchId = client.create(batchName);
+            if (batchId.empty()) {
+                nlohmann::json j;
+                j["error"]   = "xai_create_failed";
+                j["message"] = client.lastError();
+                return j.dump();
+            }
+            if (!client.addRequests(batchId, envelopes)) {
+                nlohmann::json j;
+                j["error"]    = "xai_add_requests_failed";
+                j["message"]  = client.lastError();
+                j["batch_id"] = batchId;
+                return j.dump();
+            }
+
+            int64_t nowSec = std::chrono::duration_cast<std::chrono::seconds>(
+                                 std::chrono::system_clock::now().time_since_epoch()).count();
+            nlohmann::json ridsJson = rids;
+            try {
+                Database::instance().execute(
+                    "INSERT INTO batches (id, name, owner, kind, created_at, updated_at, "
+                    "state, num_requests, num_pending, request_ids_json, metadata) "
+                    "VALUES (?1, ?2, ?3, ?4, ?5, ?5, 'processing', ?6, ?6, ?7, '{}')",
+                    {batchId, batchName, sessionId_, kind,
+                     std::to_string(nowSec),
+                     std::to_string(envelopes.size()),
+                     ridsJson.dump()});
+            } catch (const std::exception& e) {
+                spdlog::warn("[batch_submit] row insert failed: {}", e.what());
+            }
+
+            BatchPoller::instance().pollNow();
+
+            nlohmann::json j;
+            j["batch_id"]     = batchId;
+            j["name"]         = batchName;
+            j["kind"]         = kind;
+            j["num_requests"] = envelopes.size();
+            j["request_ids"]  = rids;
+            j["state"]        = "processing";
+            j["hint"]         = "Batches typically complete within minutes. Poll with get_batch.";
+            return j.dump();
+        }
+
+        // ── get_batch ─────────────────────────────────────────
+        if (name == "get_batch") {
+            std::string batchId = get("batch_id");
+            if (batchId.empty()) return R"({"error": "batch_id required"})";
+            try {
+                auto row = Database::instance().queryOne(
+                    "SELECT id, name, owner, kind, state, num_requests, num_pending, "
+                    "num_success, num_error, num_cancelled, cost_usd_ticks, expires_at, "
+                    "created_at, updated_at, last_polled FROM batches WHERE id = ?1",
+                    {batchId});
+                if (!row.is_null()) {
+                    nlohmann::json j = row;
+                    int64_t ticks = row.value("cost_usd_ticks", 0);
+                    j["cost_usd"] = static_cast<double>(ticks) / 1e10;
+                    return j.dump();
+                }
+            } catch (...) {}
+
+            std::string apiKey = resolvedXaiApiKey();
+            if (apiKey.empty()) return R"({"error": "XAI_API_KEY not set"})";
+            BatchClient client(apiKey);
+            auto st = client.get(batchId);
+            if (!st) {
+                nlohmann::json j;
+                j["error"]   = "xai_get_failed";
+                j["message"] = client.lastError();
+                return j.dump();
+            }
+            nlohmann::json j;
+            j["id"]             = st->batchId;
+            j["name"]           = st->name;
+            j["state"]          = st->state;
+            j["num_requests"]   = st->numRequests;
+            j["num_pending"]    = st->numPending;
+            j["num_success"]    = st->numSuccess;
+            j["num_error"]      = st->numError;
+            j["num_cancelled"]  = st->numCancelled;
+            j["cost_usd_ticks"] = st->costUsdTicks;
+            j["cost_usd"]       = static_cast<double>(st->costUsdTicks) / 1e10;
+            j["expires_at"]     = st->expiresAt;
+            return j.dump();
+        }
+
+        // ── list_batches ──────────────────────────────────────
+        if (name == "list_batches") {
+            std::string owner = get("owner");
+            std::string kind  = get("kind");
+            std::string state = get("state");
+            int limit = 50;
+            try {
+                std::string l = get("limit");
+                if (!l.empty()) limit = std::stoi(l);
+            } catch (...) {}
+            if (limit < 1) limit = 1;
+            if (limit > 500) limit = 500;
+
+            std::string sql = "SELECT id, name, owner, kind, state, num_requests, "
+                              "num_pending, num_success, num_error, cost_usd_ticks, "
+                              "created_at FROM batches WHERE 1=1";
+            std::vector<std::string> params;
+            if (!owner.empty()) { sql += " AND owner = ?" + std::to_string(params.size()+1); params.push_back(owner); }
+            if (!kind.empty())  { sql += " AND kind = ?"  + std::to_string(params.size()+1); params.push_back(kind); }
+            if (!state.empty()) { sql += " AND state = ?" + std::to_string(params.size()+1); params.push_back(state); }
+            sql += " ORDER BY created_at DESC LIMIT " + std::to_string(limit);
+
+            auto rows = Database::instance().query(sql, params);
+            for (auto& r : rows) {
+                int64_t ticks = r.value("cost_usd_ticks", 0);
+                r["cost_usd"] = static_cast<double>(ticks) / 1e10;
+            }
+            nlohmann::json j;
+            j["batches"] = rows;
+            j["count"]   = rows.size();
+            return j.dump();
+        }
+
+        // ── get_batch_results ─────────────────────────────────
+        if (name == "get_batch_results") {
+            std::string batchId = get("batch_id");
+            if (batchId.empty()) return R"({"error": "batch_id required"})";
+            int limit = 100;
+            try {
+                std::string l = get("limit");
+                if (!l.empty()) limit = std::stoi(l);
+            } catch (...) {}
+            if (limit < 1) limit = 1;
+            if (limit > 500) limit = 500;
+            std::string token = get("pagination_token");
+
+            if (token.empty()) {
+                try {
+                    auto row = Database::instance().queryOne(
+                        "SELECT results_json FROM batches WHERE id = ?1", {batchId});
+                    if (!row.is_null()) {
+                        std::string cached = row.value("results_json", "");
+                        if (!cached.empty()) {
+                            nlohmann::json parsed;
+                            try { parsed = nlohmann::json::parse(cached); }
+                            catch (...) { parsed = nlohmann::json::array(); }
+                            nlohmann::json j;
+                            j["results"] = parsed;
+                            j["count"]   = parsed.size();
+                            j["source"]  = "cache";
+                            return j.dump();
+                        }
+                    }
+                } catch (...) {}
+            }
+
+            std::string apiKey = resolvedXaiApiKey();
+            if (apiKey.empty()) return R"({"error": "XAI_API_KEY not set"})";
+            BatchClient client(apiKey);
+            auto page = client.listResults(batchId, limit, token);
+            nlohmann::json results = nlohmann::json::array();
+            for (const auto& r : page.results) {
+                nlohmann::json item;
+                item["batch_request_id"]  = r.batchRequestId;
+                item["succeeded"]         = r.succeeded;
+                if (!r.errorMessage.empty())
+                    item["error_message"] = r.errorMessage;
+                item["response"]          = r.response;
+                item["prompt_tokens"]     = r.promptTokens;
+                item["completion_tokens"] = r.completionTokens;
+                item["cached_tokens"]     = r.cachedTokens;
+                item["reasoning_tokens"]  = r.reasoningTokens;
+                item["cost_usd_ticks"]    = r.costUsdTicks;
+                results.push_back(item);
+            }
+            nlohmann::json j;
+            j["results"]          = results;
+            j["count"]            = results.size();
+            j["pagination_token"] = page.nextPageToken;
+            j["source"]           = "live";
+            return j.dump();
+        }
+
+        // ── cancel_batch ──────────────────────────────────────
+        if (name == "cancel_batch") {
+            std::string batchId = get("batch_id");
+            if (batchId.empty()) return R"({"error": "batch_id required"})";
+            std::string apiKey = resolvedXaiApiKey();
+            if (apiKey.empty()) return R"({"error": "XAI_API_KEY not set"})";
+            BatchClient client(apiKey);
+            bool ok = client.cancel(batchId);
+            nlohmann::json j;
+            j["cancelled"] = ok;
+            j["batch_id"]  = batchId;
+            if (!ok) j["message"] = client.lastError();
+            if (ok) {
+                int64_t nowSec = std::chrono::duration_cast<std::chrono::seconds>(
+                                    std::chrono::system_clock::now().time_since_epoch()).count();
+                try {
+                    Database::instance().execute(
+                        "UPDATE batches SET state = 'cancelled', updated_at = ?1 WHERE id = ?2",
+                        {std::to_string(nowSec), batchId});
+                } catch (...) {}
+                BatchPoller::instance().pollNow();
+            }
             return j.dump();
         }
 

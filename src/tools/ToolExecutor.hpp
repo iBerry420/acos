@@ -31,6 +31,13 @@ public:
     const std::string& sessionId() const { return sessionId_; }
     const std::vector<EditRecord>& editHistory() const { return editHistory_; }
 
+    /// xAI prompt-cache routing key of the parent session. Propagated to
+    /// `spawn_subagent` so children can mint conv_ids that share the parent's
+    /// routing prefix (keeps siblings on the same xAI server pool, which lets
+    /// them reuse each other's cached sub-agent scaffolding).
+    void setConvId(const std::string& id) { convId_ = id; }
+    const std::string& convId() const { return convId_; }
+
     /// Model id for xAI Responses API live web / X search (usually same as chat model).
     void setSearchModel(std::string model) { searchModel_ = std::move(model); }
 
@@ -63,6 +70,7 @@ protected:
     std::string vaultPassword_;
     std::string subAgentTaskId_;
     int subAgentDepth_ = 0;
+    std::string convId_;
 };
 
 } // namespace avacli

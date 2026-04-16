@@ -10,6 +10,7 @@
 #include "tools/ToolRegistry.hpp"
 #include "platform/Paths.hpp"
 #include "db/Database.hpp"
+#include "services/BatchPoller.hpp"
 #include "services/MeshManager.hpp"
 #include "services/RelayManager.hpp"
 #include "services/RelayClient.hpp"
@@ -59,6 +60,13 @@ void HttpServer::start() {
 
     MeshManager::instance().start();
 
+    // Phase 5: background poller for xAI Batch API state. Looks up processing
+    // batches every ~30s, persists updates + cached results. The poller
+    // tolerates an empty API key (returns silently), so it's safe to start
+    // even if Settings haven't been configured yet.
+    BatchPoller::instance().setServeConfig(&config_);
+    BatchPoller::instance().start();
+
     // In server mode, set the relay accept token
     if (config_.nodeRole == "server" && !config_.relayToken.empty())
         RelayManager::instance().setAcceptToken(config_.relayToken);
@@ -71,6 +79,7 @@ void HttpServer::start() {
     impl_->svr.listen(config_.host, port);
 
     RelayClient::instance().stop();
+    BatchPoller::instance().stop();
     MeshManager::instance().stop();
     running_ = false;
 }
@@ -203,6 +212,7 @@ void HttpServer::setupRoutes() {
     registerSystemRoutes(svr, ctx);
     registerRelayRoutes(svr, ctx);
     registerSubAgentRoutes(svr, ctx);
+    registerBatchRoutes(svr, ctx);
 
     // Phase 4: wire SubAgentManager so spawn_subagent can resolve xAI auth
     // + workspace + default model from the shared config. Must happen after

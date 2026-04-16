@@ -464,6 +464,52 @@ void Database::migrate() {
         setVersion(6);
         spdlog::info("Database migrated to v6 (agent_tasks + agent_leases)");
     }
+
+    if (ver < 7) {
+        // Phase 5: xAI Batch API integration. Batched requests pay a flat
+        // 50% discount across all token types and stack with prompt caching
+        // (a cache-hit batched input on grok-4.20 bills ~$0.10/1M — 20x
+        // cheaper than cold real-time). We store just enough per-batch
+        // metadata to (a) poll the upstream state in the background and
+        // (b) render a management UI without refetching from xAI every
+        // load. The `results_json` blob is lazy-populated once the batch
+        // hits state='complete' so completed rows are self-contained even
+        // if the upstream expires.
+        //
+        // `owner` is an opaque string chosen by the caller — typically the
+        // chat session id, app slug, or service id. Empty = global.
+        // `kind` is a loose classifier ('user', 'summarize', 'eval',
+        // 'service', 'rss') used for filtering in the UI; not enforced.
+        sqlite3_exec(db_, R"(
+            CREATE TABLE IF NOT EXISTS batches (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                owner TEXT DEFAULT '',
+                kind TEXT NOT NULL DEFAULT 'user',
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                state TEXT NOT NULL DEFAULT 'processing',
+                num_requests INTEGER DEFAULT 0,
+                num_pending INTEGER DEFAULT 0,
+                num_success INTEGER DEFAULT 0,
+                num_error INTEGER DEFAULT 0,
+                num_cancelled INTEGER DEFAULT 0,
+                cost_usd_ticks INTEGER DEFAULT 0,
+                expires_at INTEGER DEFAULT 0,
+                last_polled INTEGER DEFAULT 0,
+                results_json TEXT DEFAULT '',
+                request_ids_json TEXT DEFAULT '[]',
+                metadata TEXT DEFAULT '{}'
+            );
+            CREATE INDEX IF NOT EXISTS idx_batches_state ON batches(state, created_at);
+            CREATE INDEX IF NOT EXISTS idx_batches_owner ON batches(owner, created_at);
+            CREATE INDEX IF NOT EXISTS idx_batches_kind ON batches(kind, created_at);
+        )", nullptr, nullptr, &err);
+        if (err) { spdlog::error("Migration v7 error: {}", err); sqlite3_free(err); err = nullptr; }
+
+        setVersion(7);
+        spdlog::info("Database migrated to v7 (batches)");
+    }
 }
 
 } // namespace avacli

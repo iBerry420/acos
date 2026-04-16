@@ -44,6 +44,9 @@ const std::unordered_map<std::string, int> TOOL_MIN_MODE = {
     // Phase 4 sub-agents
     {"spawn_subagent", 2}, {"wait_subagent", 2}, {"cancel_subagent", 2},
     {"list_subagents", 0},
+    // Phase 5 batch API (xAI Batch: flat 50% off + stacks with caching)
+    {"batch_submit", 2}, {"get_batch", 0}, {"list_batches", 0},
+    {"cancel_batch", 2}, {"get_batch_results", 0},
 };
 
 int modeLevel(Mode m) {
@@ -748,6 +751,89 @@ void registerListSubAgentsImpl() {
         params, {}));
 }
 
+void registerBatchSubmitImpl() {
+    auto params = nlohmann::json::object({
+        {"name", {{"type", "string"},
+                  {"description", "Human-readable label for this batch (e.g. 'nightly_rss_digest')"}}},
+        {"kind", {{"type", "string"},
+                  {"description", "Classifier for filtering: user | summarize | eval | service | rss. "
+                                  "Defaults to 'user'."}}},
+        {"model", {{"type", "string"},
+                   {"description", "Default model for every prompt that doesn't set its own (e.g. 'grok-4.20-reasoning')"}}},
+        {"prompts", {{"type", "array"},
+                     {"description",
+                      "List of prompts to queue. Each item: "
+                      "{id?: string, system?: string, user: string, model?: string, max_tokens?: integer}. "
+                      "If `id` is omitted we auto-generate one as req_<index>."},
+                     {"items", {{"type", "object"}}}}},
+    });
+    ALL_TOOLS.push_back(makeTool("batch_submit",
+        "Queue a list of prompts through xAI's Batch API. Batched requests pay a flat 50% "
+        "discount on every token type (input, output, cached, reasoning) and they don't count "
+        "against real-time rate limits. Stacks with prompt caching — on grok-4.20 a cache-hit "
+        "batched input costs ~$0.10/1M vs ~$2.00/1M real-time cold (20x cheaper). Results are "
+        "typically ready within a few minutes to 24h. Returns the `batch_id`; poll with "
+        "`get_batch`/`get_batch_results` or just wait for the server's background poller to "
+        "cache them. USE FOR: evals, bulk summarization, scheduled analysis, RSS digests, "
+        "knowledge-base rebuilds. DO NOT USE for anything the user is actively waiting on.",
+        params, {"name", "prompts"}));
+}
+
+void registerGetBatchImpl() {
+    auto params = nlohmann::json::object({
+        {"batch_id", {{"type", "string"},
+                      {"description", "batch_id returned by batch_submit"}}},
+    });
+    ALL_TOOLS.push_back(makeTool("get_batch",
+        "Get the current state of a batch — num_requests / num_pending / num_success / "
+        "num_error / cost_usd. When num_pending == 0 the batch is complete and you can call "
+        "get_batch_results. Returns immediately from the local cache if the server poller has "
+        "already seen this batch complete.",
+        params, {"batch_id"}));
+}
+
+void registerListBatchesImpl() {
+    auto params = nlohmann::json::object({
+        {"owner", {{"type", "string"},
+                   {"description", "Optional filter by owner (typically session/app id)"}}},
+        {"kind",  {{"type", "string"},
+                   {"description", "Optional filter by kind (user|summarize|eval|service|rss)"}}},
+        {"state", {{"type", "string"},
+                   {"description", "Optional filter: 'processing' | 'complete' | 'cancelled'"}}},
+        {"limit", {{"type", "integer"},
+                   {"description", "Max rows (default 50, cap 500)"}}},
+    });
+    ALL_TOOLS.push_back(makeTool("list_batches",
+        "List recent batches this node has submitted, most-recent first. Useful for "
+        "picking up stale work after a restart or surfacing unfinished jobs to the user.",
+        params, {}));
+}
+
+void registerGetBatchResultsImpl() {
+    auto params = nlohmann::json::object({
+        {"batch_id", {{"type", "string"}, {"description", "batch_id returned by batch_submit"}}},
+        {"limit",    {{"type", "integer"},
+                      {"description", "Page size, default 100 (cap 500)"}}},
+        {"pagination_token", {{"type", "string"},
+                              {"description", "Token from a previous page's response, omit for first page"}}},
+    });
+    ALL_TOOLS.push_back(makeTool("get_batch_results",
+        "Retrieve the results of a completed (or partially-complete) batch. Each entry has "
+        "`batch_request_id`, `succeeded`, and `response.chat_get_completion.choices[0].message` "
+        "matching your input. On cache hit returns all results at once; otherwise paginated.",
+        params, {"batch_id"}));
+}
+
+void registerCancelBatchImpl() {
+    auto params = nlohmann::json::object({
+        {"batch_id", {{"type", "string"}, {"description", "batch_id returned by batch_submit"}}},
+    });
+    ALL_TOOLS.push_back(makeTool("cancel_batch",
+        "Cancel a batch. Already-processed results remain available; pending requests are "
+        "dropped. No-op on batches that are already terminal.",
+        params, {"batch_id"}));
+}
+
 void registerSummarizeAndNewChatImpl() {
     auto params = nlohmann::json::object({
         {"summary", {{"type", "string"}, {"description", "Detailed summary of the conversation so far including key decisions, code changes, and context"}}},
@@ -824,6 +910,12 @@ void ToolRegistry::registerAll() {
     registerWaitSubAgentImpl();
     registerCancelSubAgentImpl();
     registerListSubAgentsImpl();
+    // Phase 5 batch API
+    registerBatchSubmitImpl();
+    registerGetBatchImpl();
+    registerListBatchesImpl();
+    registerGetBatchResultsImpl();
+    registerCancelBatchImpl();
     REGISTERED = true;
     spdlog::debug("ToolRegistry: Registered {} tools", ALL_TOOLS.size());
 }

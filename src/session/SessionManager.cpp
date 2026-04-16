@@ -2,12 +2,29 @@
 #include "platform/Paths.hpp"
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
+#include <chrono>
 #include <fstream>
 #include <filesystem>
+#include <random>
+#include <sstream>
 
 namespace avacli {
 
 namespace fs = std::filesystem;
+
+std::string SessionManager::generateConvId() {
+    // Seeded per-process with a high-resolution clock tick; random_device is
+    // unreliable on some musl builds in sandboxed containers. mt19937_64
+    // collision odds at ~1e-9 per mint are fine for cache routing keys.
+    static thread_local std::mt19937_64 rng(
+        static_cast<unsigned long long>(
+            std::chrono::high_resolution_clock::now().time_since_epoch().count())
+        ^ static_cast<unsigned long long>(
+            reinterpret_cast<std::uintptr_t>(&rng)));
+    std::ostringstream os;
+    os << "conv-" << std::hex << rng();
+    return os.str();
+}
 
 std::string SessionManager::defaultSessionsDir() {
     std::string home = userHomeDirectory();
@@ -41,6 +58,12 @@ bool SessionManager::save(const std::string& name, const SessionData& data) {
         j["mode"] = modeToString(data.mode);
         j["total_prompt_tokens"] = data.totalPromptTokens;
         j["total_completion_tokens"] = data.totalCompletionTokens;
+        if (!data.convId.empty())
+            j["conv_id"] = data.convId;
+        if (!data.lastResponseId.empty())
+            j["last_response_id"] = data.lastResponseId;
+        if (data.lastSubmittedCount > 0)
+            j["last_submitted_count"] = data.lastSubmittedCount;
 
         auto msgs = nlohmann::json::array();
         for (const auto& m : data.messages) {
@@ -53,6 +76,8 @@ bool SessionManager::save(const std::string& name, const SessionData& data) {
                 }
                 msg["tool_calls"] = arr;
             }
+            if (!m.reasoning_content.empty())
+                msg["reasoning_content"] = m.reasoning_content;
             msgs.push_back(msg);
         }
         j["messages"] = msgs;
@@ -98,6 +123,9 @@ bool SessionManager::load(const std::string& name, SessionData& data) {
         data.mode = j.contains("mode") ? modeFromString(j["mode"].get<std::string>()) : Mode::Question;
         data.totalPromptTokens = j.value("total_prompt_tokens", 0ULL);
         data.totalCompletionTokens = j.value("total_completion_tokens", 0ULL);
+        data.convId = j.value("conv_id", "");
+        data.lastResponseId = j.value("last_response_id", "");
+        data.lastSubmittedCount = j.value("last_submitted_count", 0ULL);
 
         data.messages.clear();
         if (j.contains("messages")) {
@@ -116,6 +144,7 @@ bool SessionManager::load(const std::string& name, SessionData& data) {
                         msg.tool_calls.push_back(tcall);
                     }
                 }
+                msg.reasoning_content = m.value("reasoning_content", "");
                 data.messages.push_back(std::move(msg));
             }
         }

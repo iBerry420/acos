@@ -30,6 +30,10 @@ std::string buildRequestBody(const std::vector<Message>& messages,
             msg["content"] = m.content;
         } else if (m.role == "assistant" && !m.tool_calls.empty()) {
             if (!m.content.empty()) msg["content"] = m.content;
+            // Echo back reasoning_content on assistant turns so xAI can serve
+            // its reasoning-cache entries. Non-reasoning models ignore the field.
+            if (!m.reasoning_content.empty())
+                msg["reasoning_content"] = m.reasoning_content;
             auto arr = nlohmann::json::array();
             for (const auto& tc : m.tool_calls) {
                 arr.push_back({
@@ -39,6 +43,9 @@ std::string buildRequestBody(const std::vector<Message>& messages,
                 });
             }
             msg["tool_calls"] = arr;
+        } else if (m.role == "assistant" && !m.reasoning_content.empty()) {
+            msg["content"] = m.content;
+            msg["reasoning_content"] = m.reasoning_content;
         } else if (!m.content_parts.empty()) {
             auto parts = nlohmann::json::array();
             for (const auto& p : m.content_parts) {
@@ -132,15 +139,24 @@ bool XAIClient::chatStream(const std::vector<Message>& messages,
                 if (choice.contains("delta")) {
                     const auto& delta = choice["delta"];
 
-                    // Handle reasoning_content from reasoning models (grok-4-*-reasoning)
+                    // Handle reasoning_content from reasoning models (grok-4-*-reasoning).
+                    // When a caller registers onReasoning, we deliver the raw blob there
+                    // so it can be captured into the Message for replay on the next turn
+                    // (keeps xAI's reasoning-cache warm). Without onReasoning, fall back
+                    // to the legacy inline-<thought> behaviour so existing callers (the
+                    // web-UI thought splitter, TUI) keep working unchanged.
                     if (delta.contains("reasoning_content") && delta["reasoning_content"].is_string()) {
                         std::string rc = delta["reasoning_content"].get<std::string>();
-                        if (!rc.empty() && state.cbs->onContent) {
-                            if (!state.inReasoning) {
-                                state.inReasoning = true;
-                                state.cbs->onContent("<thought>");
+                        if (!rc.empty()) {
+                            if (state.cbs->onReasoning) {
+                                state.cbs->onReasoning(rc);
+                            } else if (state.cbs->onContent) {
+                                if (!state.inReasoning) {
+                                    state.inReasoning = true;
+                                    state.cbs->onContent("<thought>");
+                                }
+                                state.cbs->onContent(rc);
                             }
-                            state.cbs->onContent(rc);
                         }
                     }
 
@@ -190,10 +206,35 @@ bool XAIClient::chatStream(const std::vector<Message>& messages,
                     u.completionTokens = usage["completion_tokens"].get<size_t>();
                 else if (usage.contains("output_tokens"))
                     u.completionTokens = usage["output_tokens"].get<size_t>();
-                if (usage.contains("reasoning_tokens"))
-                    u.completionTokens += usage["reasoning_tokens"].get<size_t>();
-                else if (usage.contains("output_tokens_details") && usage["output_tokens_details"].contains("reasoning_tokens"))
-                    u.completionTokens += usage["output_tokens_details"]["reasoning_tokens"].get<size_t>();
+                if (usage.contains("reasoning_tokens")) {
+                    size_t rt = usage["reasoning_tokens"].get<size_t>();
+                    u.reasoningTokens = rt;
+                    u.completionTokens += rt;
+                } else if (usage.contains("output_tokens_details") &&
+                           usage["output_tokens_details"].contains("reasoning_tokens")) {
+                    size_t rt = usage["output_tokens_details"]["reasoning_tokens"].get<size_t>();
+                    u.reasoningTokens = rt;
+                    u.completionTokens += rt;
+                } else if (usage.contains("completion_tokens_details") &&
+                           usage["completion_tokens_details"].contains("reasoning_tokens")) {
+                    u.reasoningTokens =
+                        usage["completion_tokens_details"]["reasoning_tokens"].get<size_t>();
+                }
+                // xAI prompt cache: cached prompt tokens bill at ~10x less on grok-4.20.
+                if (usage.contains("prompt_tokens_details") &&
+                    usage["prompt_tokens_details"].contains("cached_tokens")) {
+                    u.cachedPromptTokens =
+                        usage["prompt_tokens_details"]["cached_tokens"].get<size_t>();
+                } else if (usage.contains("input_tokens_details") &&
+                           usage["input_tokens_details"].contains("cached_tokens")) {
+                    u.cachedPromptTokens =
+                        usage["input_tokens_details"]["cached_tokens"].get<size_t>();
+                }
+                if (u.cachedPromptTokens > 0 || u.promptTokens > 1000) {
+                    spdlog::info("[cache] prompt={} cached={} ratio={}%",
+                                 u.promptTokens, u.cachedPromptTokens,
+                                 static_cast<int>(u.cacheHitRatio() * 100.0));
+                }
                 state.cbs->onUsage(u);
             }
         } catch (const nlohmann::json::exception& e) {
@@ -279,6 +320,14 @@ bool XAIClient::chatStream(const std::vector<Message>& messages,
         std::string auth = "Authorization: Bearer " + apiKey_;
         headers = curl_slist_append(headers, auth.c_str());
     }
+    // Cache-routing hint: x-grok-conv-id pins the request to the same xAI server
+    // box across turns, which is what actually makes the KV cache hit warm.
+    // Without this, requests get round-robined and even byte-stable prefixes
+    // land on cold boxes half the time.
+    if (!opts.convId.empty()) {
+        std::string convHdr = "x-grok-conv-id: " + opts.convId;
+        headers = curl_slist_append(headers, convHdr.c_str());
+    }
 
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
@@ -336,6 +385,17 @@ bool XAIClient::responsesStream(const std::string& instructions,
     if (opts.maxTokens > 0)
         body["max_output_tokens"] = opts.maxTokens;
 
+    // Responses API uses a body field instead of a header for cache routing.
+    // Same semantics as x-grok-conv-id on chat completions: stable across turns.
+    if (!opts.convId.empty())
+        body["prompt_cache_key"] = opts.convId;
+
+    // When chaining a stored conversation, xAI expects only NEW input items
+    // (tool results, user follow-ups) and replays the stored history server-side.
+    // This is the single biggest bandwidth + cache win on the Responses API.
+    if (!opts.previousResponseId.empty())
+        body["previous_response_id"] = opts.previousResponseId;
+
     const std::string url = responsesUrl_;
     const std::string jsonBody = body.dump();
 
@@ -383,12 +443,16 @@ bool XAIClient::responsesStream(const std::string& instructions,
             }
             else if (type == "response.reasoning.delta" || type == "response.reasoning_summary_text.delta") {
                 std::string delta = j.value("delta", "");
-                if (!delta.empty() && state.cbs->onContent) {
-                    if (!state.inReasoning) {
-                        state.inReasoning = true;
-                        state.cbs->onContent("<thought>");
+                if (!delta.empty()) {
+                    if (state.cbs->onReasoning) {
+                        state.cbs->onReasoning(delta);
+                    } else if (state.cbs->onContent) {
+                        if (!state.inReasoning) {
+                            state.inReasoning = true;
+                            state.cbs->onContent("<thought>");
+                        }
+                        state.cbs->onContent(delta);
                     }
-                    state.cbs->onContent(delta);
                 }
             }
             else if (type == "response.function_call_arguments.delta") {
@@ -438,11 +502,35 @@ bool XAIClient::responsesStream(const std::string& instructions,
 
                 if (j.contains("response") && j["response"].is_object()) {
                     const auto& resp = j["response"];
+                    // Capture the server-assigned response id so the caller can chain the
+                    // next turn with `previous_response_id` instead of re-sending history.
+                    if (resp.contains("id") && resp["id"].is_string() && state.cbs->onResponseId) {
+                        state.cbs->onResponseId(resp["id"].get<std::string>());
+                    }
                     if (resp.contains("usage") && state.cbs->onUsage) {
                         Usage u;
                         const auto& usage = resp["usage"];
                         u.promptTokens = usage.value("input_tokens", (size_t)0);
                         u.completionTokens = usage.value("output_tokens", (size_t)0);
+                        if (usage.contains("output_tokens_details") &&
+                            usage["output_tokens_details"].contains("reasoning_tokens")) {
+                            u.reasoningTokens =
+                                usage["output_tokens_details"]["reasoning_tokens"].get<size_t>();
+                        }
+                        if (usage.contains("input_tokens_details") &&
+                            usage["input_tokens_details"].contains("cached_tokens")) {
+                            u.cachedPromptTokens =
+                                usage["input_tokens_details"]["cached_tokens"].get<size_t>();
+                        } else if (usage.contains("prompt_tokens_details") &&
+                                   usage["prompt_tokens_details"].contains("cached_tokens")) {
+                            u.cachedPromptTokens =
+                                usage["prompt_tokens_details"]["cached_tokens"].get<size_t>();
+                        }
+                        if (u.cachedPromptTokens > 0 || u.promptTokens > 1000) {
+                            spdlog::info("[cache] prompt={} cached={} ratio={}% (responses)",
+                                         u.promptTokens, u.cachedPromptTokens,
+                                         static_cast<int>(u.cacheHitRatio() * 100.0));
+                        }
                         state.cbs->onUsage(u);
                     }
                 }

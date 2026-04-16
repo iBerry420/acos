@@ -199,6 +199,8 @@ void SubAgentManager::runTask(std::shared_ptr<RunCtx> ctx, SpawnOptions opts) {
     nlohmann::json transcript = nlohmann::json::array();
     int64_t promptTokensTotal = 0;
     int64_t completionTokensTotal = 0;
+    int64_t cachedTokensTotal = 0;
+    int64_t reasoningTokensTotal = 0;
 
     try {
         // Cancellation checkpoint before we do anything heavy.
@@ -223,6 +225,14 @@ void SubAgentManager::runTask(std::shared_ptr<RunCtx> ctx, SpawnOptions opts) {
         const std::string workspace = config_->workspace;
         const std::string model = !opts.model.empty() ? opts.model : config_->model;
 
+        // Compose a cache-routing key for this sub-agent. Sharing the parent's
+        // prefix lets xAI route siblings to the same server pool, where they
+        // can reuse each other's cached sub-agent scaffolding. Appending the
+        // taskId still distinguishes individual tasks for the local KV cache.
+        std::string childConvId = !opts.parentConvId.empty()
+            ? (opts.parentConvId + ":" + taskId)
+            : taskId;
+
         // Build the scoped executor.
         ScopedToolExecutor::Scope scope;
         scope.taskId = taskId;
@@ -237,6 +247,8 @@ void SubAgentManager::runTask(std::shared_ptr<RunCtx> ctx, SpawnOptions opts) {
         executor->setSessionId(taskId);
         executor->setSearchModel(model);
         executor->setSubAgentContext(taskId, depth);
+        // Propagate child conv_id so grandchild sub-agents inherit the routing prefix.
+        executor->setConvId(childConvId);
 
         // Build messages with a sub-agent-tailored system prompt + user goal.
         std::vector<Message> messages;
@@ -257,6 +269,7 @@ void SubAgentManager::runTask(std::shared_ptr<RunCtx> ctx, SpawnOptions opts) {
             nullptr,
             [](Mode) {});
         engine->setCancelFlag(ctx->cancelFlag.get());
+        engine->setConvId(childConvId);
 
         // Cap tool_call iterations via the engine's existing machinery
         // (AgentEngine loops until the model stops emitting tool_calls;
@@ -289,9 +302,12 @@ void SubAgentManager::runTask(std::shared_ptr<RunCtx> ctx, SpawnOptions opts) {
         XAIClient client(apiKey, chatUrl);
         auto tools = ToolRegistry::getToolsForMode(Mode::Agent);
 
-        auto onUsage = [&promptTokensTotal, &completionTokensTotal](const Usage& u) {
+        auto onUsage = [&promptTokensTotal, &completionTokensTotal,
+                        &cachedTokensTotal, &reasoningTokensTotal](const Usage& u) {
             promptTokensTotal += static_cast<int64_t>(u.promptTokens);
             completionTokensTotal += static_cast<int64_t>(u.completionTokens);
+            cachedTokensTotal += static_cast<int64_t>(u.cachedPromptTokens);
+            reasoningTokensTotal += static_cast<int64_t>(u.reasoningTokens);
         };
 
         bool ok = engine->run(client, model, messages, tools, onUsage);
@@ -308,9 +324,17 @@ void SubAgentManager::runTask(std::shared_ptr<RunCtx> ctx, SpawnOptions opts) {
         nlohmann::json result;
         result["summary"] = *contentBuffer;
         result["transcript"] = transcript;
+        int64_t billable = promptTokensTotal > cachedTokensTotal
+            ? promptTokensTotal - cachedTokensTotal : 0;
+        int cacheHitPct = promptTokensTotal > 0
+            ? static_cast<int>((cachedTokensTotal * 100) / promptTokensTotal) : 0;
         result["usage"] = {
             {"prompt_tokens", promptTokensTotal},
-            {"completion_tokens", completionTokensTotal}};
+            {"completion_tokens", completionTokensTotal},
+            {"cached_tokens", cachedTokensTotal},
+            {"reasoning_tokens", reasoningTokensTotal},
+            {"billable_prompt_tokens", billable},
+            {"cache_hit_percent", cacheHitPct}};
 
         if (ok) {
             markDone("succeeded", result, "", promptTokensTotal, completionTokensTotal);

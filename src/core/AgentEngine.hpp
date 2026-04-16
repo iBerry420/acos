@@ -55,8 +55,40 @@ public:
     void setMaxTokensOverride(int n) { maxTokensOverride_ = n; }
     void setReasoningEffort(const std::string& e) { reasoningEffort_ = e; }
 
-    /// Build rich system prompt for the current mode.
+    /// Stable xAI cache-routing key for this session/task. Forwarded to the
+    /// XAIClient on every turn — chat-completions sends it as `x-grok-conv-id`,
+    /// Responses API sends it as `prompt_cache_key`. Empty = no hint.
+    void setConvId(const std::string& id) { convId_ = id; }
+    const std::string& convId() const { return convId_; }
+
+    /// Responses API only. The last response id observed from xAI. When set,
+    /// the next `runResponses()` call sends `previous_response_id` and slices
+    /// `messagesInOut` to only the items appended after `lastSubmittedCount`,
+    /// so xAI replays the stored history server-side (reasoning state intact).
+    /// AgentEngine updates both values after every successful stream, so
+    /// callers just need to persist + restore them across session save/load.
+    void setLastResponseId(const std::string& id) { lastResponseId_ = id; }
+    const std::string& lastResponseId() const { return lastResponseId_; }
+    void setLastSubmittedCount(size_t n) { lastSubmittedCount_ = n; }
+    size_t lastSubmittedCount() const { return lastSubmittedCount_; }
+    /// When false, AgentEngine always sends full input — useful as a panic
+    /// switch if xAI's stored-response feature misbehaves. Default true.
+    void setUsePreviousResponseId(bool on) { usePreviousResponseId_ = on; }
+
+    /// Build the full system prompt (static prefix + dynamic context) in a single string.
+    /// Prefer the split `buildStaticSystemPrompt` + `buildDynamicContext` on hot paths so
+    /// the static portion stays byte-stable across turns and can be served from the xAI
+    /// prompt cache (~10x cheaper input tokens on grok-4.20 models).
     std::string buildSystemPrompt(Mode mode, const std::string& workspace);
+
+    /// Cacheable static prefix: GROK_SYSTEM_PROMPT.md + workspace env. Byte-stable across
+    /// turns as long as the source file and workspace path don't change.
+    std::string buildStaticSystemPrompt(const std::string& workspace);
+
+    /// Volatile per-session context (TODOs, memory, recent edits, project notes). Meant to
+    /// be injected as its own message each time `run()` is invoked so it never overwrites
+    /// the static prefix. Returns an empty string when there is nothing to include.
+    std::string buildDynamicContext(const std::string& workspace);
 
 private:
     bool runChatCompletions(XAIClient& client, const std::string& model,
@@ -79,6 +111,11 @@ private:
     std::atomic<bool>* cancelFlag_ = nullptr;
     int maxTokensOverride_ = 0;
     std::string reasoningEffort_;
+    std::string convId_;
+    /// Responses API chain state — persisted across runs via SessionData.
+    std::string lastResponseId_;
+    size_t lastSubmittedCount_ = 0;
+    bool usePreviousResponseId_ = true;
 };
 
 } // namespace avacli

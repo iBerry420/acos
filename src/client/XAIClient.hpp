@@ -20,6 +20,20 @@ struct ChatOptions {
     /// Reasoning effort for Responses API models: "low", "medium", "high", "xhigh".
     /// Empty = omit from request.
     std::string reasoningEffort;
+    /// Stable routing key for xAI's prompt cache. Emitted as the `x-grok-conv-id`
+    /// header on chat-completions requests, or as `prompt_cache_key` in the body
+    /// on Responses API requests. Empty = no routing hint (requests get
+    /// round-robined by xAI and cache hits become opportunistic). Keeping this
+    /// byte-stable across all turns of a logical session is what unlocks the
+    /// ~10x cached-input discount on grok-4.20-* models.
+    std::string convId;
+    /// Responses API only. When non-empty, sent as `previous_response_id` so xAI
+    /// chains from the server-side stored conversation (reasoning state + prior
+    /// turns). With this set, `input` should contain ONLY new items since the
+    /// last response — xAI remembers everything before it. Responses are stored
+    /// for 30 days. If the ID has expired or the call returns "response not
+    /// found", AgentEngine falls back to a full-history resend.
+    std::string previousResponseId;
 };
 
 class XAIClient {
@@ -31,12 +45,25 @@ public:
     using ToolCallsCallback = std::function<void(const std::vector<ToolCall>&)>;
     using UsageCallback = std::function<void(const Usage&)>;
     using DoneCallback = std::function<void()>;
+    /// Reasoning-content delta callback (chat-completions reasoning models).
+    /// When set, XAIClient routes raw `reasoning_content` deltas here instead
+    /// of inlining them as `<thought>…</thought>` through `onContent`. Lets the
+    /// caller accumulate the reasoning separately for replay on subsequent
+    /// turns — required to keep xAI's reasoning cache warm across the loop.
+    using ReasoningCallback = std::function<void(const std::string& delta)>;
+    /// Response-ID callback (Responses API only). Fires once per successful
+    /// `response.completed` / `response.done` event with the server-assigned
+    /// response id. Caller stashes this and passes it as
+    /// `ChatOptions::previousResponseId` on the next turn.
+    using ResponseIdCallback = std::function<void(const std::string& id)>;
 
     struct StreamCallbacks {
         ContentCallback onContent;
         ToolCallsCallback onToolCalls;
         UsageCallback onUsage;
         DoneCallback onDone;
+        ReasoningCallback onReasoning;
+        ResponseIdCallback onResponseId;
     };
 
     bool chatStream(const std::vector<Message>& messages,
