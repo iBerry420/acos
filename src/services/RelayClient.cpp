@@ -3,12 +3,36 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 #include <chrono>
+#include <string>
 #include <thread>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
 #include <unistd.h>
+#endif
 
 namespace avacli {
 
 namespace {
+
+std::string localHostLabel() {
+#ifdef _WIN32
+    char buf[256] = {};
+    DWORD n = sizeof(buf);
+    if (GetComputerNameA(buf, &n) && n > 0)
+        return std::string(buf, static_cast<std::size_t>(n));
+    return "relay-client";
+#else
+    char buf[256] = {};
+    if (gethostname(buf, sizeof(buf)) == 0)
+        return std::string(buf);
+    return "relay-client";
+#endif
+}
 
 struct CurlResponse {
     long status = 0;
@@ -162,11 +186,10 @@ void RelayClient::runLoop() {
 }
 
 bool RelayClient::registerWithServer() {
-    char hostname[256] = {};
-    gethostname(hostname, sizeof(hostname));
+    const std::string label = localHostLabel();
 
     nlohmann::json body;
-    body["label"] = std::string(hostname);
+    body["label"] = label;
     body["version"] = "2.1.0";
     body["workspace"] = "";
 
@@ -181,7 +204,7 @@ bool RelayClient::registerWithServer() {
         clientId_ = j.value("client_id", "");
         if (clientId_.empty()) return false;
         connected_ = true;
-        spdlog::info("RelayClient: registered as {} (id={})", hostname, clientId_);
+        spdlog::info("RelayClient: registered as {} (id={})", label, clientId_);
         return true;
     } catch (...) {
         return false;
