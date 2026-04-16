@@ -17,6 +17,12 @@ struct ServeConfig {
     std::string apiKey;
     std::string chatEndpointUrl = "https://api.x.ai/v1/chat/completions";
     std::string extraModel;
+    std::string mediaModel;
+
+    // Node role: "standalone" (default), "server" (accept relay clients), "client" (connect to server)
+    std::string nodeRole = "standalone";
+    std::string relayServer;        // URL of the relay server (client mode), e.g. "https://devacos.avalynn.ai"
+    std::string relayToken;         // Auth token for relay connection
 
     // Detached UI options
     std::string uiDir;              // Custom UI directory (empty = use default ~/.avacli/ui/)

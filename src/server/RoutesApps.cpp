@@ -450,7 +450,9 @@ void registerAppRoutes(httplib::Server& svr, ServerContext ctx) {
         }
 
         try {
-            std::string model = body.value("model", "grok-2-image");
+            std::string defaultMedia = ctx.config->mediaModel.empty() ? "grok-imagine-image" : ctx.config->mediaModel;
+            std::string model = body.value("model", defaultMedia);
+            if (model.empty()) model = defaultMedia;
             std::string size = body.value("size", "1024x1024");
 
             nlohmann::json reqBody;

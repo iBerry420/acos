@@ -10,6 +10,8 @@
 #include "platform/Paths.hpp"
 #include "db/Database.hpp"
 #include "services/MeshManager.hpp"
+#include "services/RelayManager.hpp"
+#include "services/RelayClient.hpp"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -56,7 +58,18 @@ void HttpServer::start() {
 
     MeshManager::instance().start();
 
+    // In server mode, set the relay accept token
+    if (config_.nodeRole == "server" && !config_.relayToken.empty())
+        RelayManager::instance().setAcceptToken(config_.relayToken);
+
+    // In client mode, start the relay client
+    if (config_.nodeRole == "client" && !config_.relayServer.empty()) {
+        RelayClient::instance().start(config_.relayServer, config_.relayToken, port);
+    }
+
     impl_->svr.listen(config_.host, port);
+
+    RelayClient::instance().stop();
     MeshManager::instance().stop();
     running_ = false;
 }
@@ -119,7 +132,8 @@ void HttpServer::setupRoutes() {
                 && req.path.rfind("/api/auth/status", 0) != 0
                 && req.path != "/api/auth/accounts"
                 && req.path != "/api/health"
-                && req.path != "/api/mesh/sync") {
+                && req.path != "/api/mesh/sync"
+                && req.path.rfind("/api/relay/", 0) != 0) {
                 std::string authHeader = req.get_header_value("Authorization");
                 bool authed = false;
                 if (authHeader.size() > 7 && authHeader.substr(0, 7) == "Bearer ") {
@@ -160,6 +174,7 @@ void HttpServer::setupRoutes() {
     registerAppRoutes(svr, ctx);
     registerServiceRoutes(svr, ctx);
     registerSystemRoutes(svr, ctx);
+    registerRelayRoutes(svr, ctx);
 
     // App serving: /apps/:slug/* serves user-created app files from SQLite
     svr.Get(R"(/apps/([^/]+)/(.*))", [](const httplib::Request& req, httplib::Response& res) {

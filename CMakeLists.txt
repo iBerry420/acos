@@ -92,6 +92,9 @@ set(SOURCES
   src/db/Database.cpp
   src/services/ServiceManager.cpp
   src/services/MeshManager.cpp
+  src/services/RelayManager.cpp
+  src/services/RelayClient.cpp
+  src/server/RoutesRelay.cpp
   src/session/SessionManager.cpp
   src/tools/ProjectNotes.cpp
   src/tools/ToolExecutor.cpp

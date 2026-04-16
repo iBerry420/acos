@@ -4,6 +4,7 @@
 #include "server/LogBuffer.hpp"
 #include "config/ModelRegistry.hpp"
 #include "config/ServeSettings.hpp"
+#include "services/RelayManager.hpp"
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -28,6 +29,10 @@ void registerSettingsRoutes(httplib::Server& svr, ServerContext ctx) {
         j["host"] = ctx.config->host;
         j["has_xai_key"] = !ctx.config->apiKey.empty();
         j["extra_model"] = ctx.config->extraModel;
+        j["media_model"] = ctx.config->mediaModel;
+        j["node_role"] = ctx.config->nodeRole;
+        j["relay_server"] = ctx.config->relayServer;
+        j["has_relay_token"] = !ctx.config->relayToken.empty();
         res.set_content(j.dump(), "application/json");
     });
 
@@ -86,6 +91,20 @@ void registerSettingsRoutes(httplib::Server& svr, ServerContext ctx) {
         }
         if (body.contains("extra_model") && body["extra_model"].is_string())
             ctx.config->extraModel = body["extra_model"].get<std::string>();
+        if (body.contains("media_model") && body["media_model"].is_string())
+            ctx.config->mediaModel = body["media_model"].get<std::string>();
+        if (body.contains("node_role") && body["node_role"].is_string()) {
+            std::string role = body["node_role"].get<std::string>();
+            if (role == "standalone" || role == "server" || role == "client")
+                ctx.config->nodeRole = role;
+        }
+        if (body.contains("relay_server") && body["relay_server"].is_string())
+            ctx.config->relayServer = body["relay_server"].get<std::string>();
+        if (body.contains("relay_token") && body["relay_token"].is_string())
+            ctx.config->relayToken = body["relay_token"].get<std::string>();
+        // Sync relay token to RelayManager at runtime
+        if (body.contains("relay_token") || body.contains("node_role"))
+            RelayManager::instance().setAcceptToken(ctx.config->relayToken);
         if (body.contains("xai_api_key") && body["xai_api_key"].is_string()) {
             std::string newKey = body["xai_api_key"].get<std::string>();
             bool keyChanged = (newKey != ctx.config->apiKey);
@@ -103,6 +122,19 @@ void registerSettingsRoutes(httplib::Server& svr, ServerContext ctx) {
         settings["port"] = ctx.config->port;
         if (!ctx.config->extraModel.empty())
             settings["extra_model"] = ctx.config->extraModel;
+        if (!ctx.config->mediaModel.empty())
+            settings["media_model"] = ctx.config->mediaModel;
+        else if (body.contains("media_model"))
+            settings.erase("media_model");
+        settings["node_role"] = ctx.config->nodeRole;
+        if (!ctx.config->relayServer.empty())
+            settings["relay_server"] = ctx.config->relayServer;
+        else if (body.contains("relay_server"))
+            settings.erase("relay_server");
+        if (!ctx.config->relayToken.empty())
+            settings["relay_token"] = ctx.config->relayToken;
+        else if (body.contains("relay_token"))
+            settings.erase("relay_token");
         if (!ctx.config->apiKey.empty())
             settings["xai_api_key"] = ctx.config->apiKey;
         else if (body.contains("xai_api_key") && body["xai_api_key"].is_string()

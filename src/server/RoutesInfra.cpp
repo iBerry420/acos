@@ -7,6 +7,7 @@
 #include "infra/VultrDeployUserdata.hpp"
 #include "config/VaultStorage.hpp"
 #include "config/ServeSettings.hpp"
+#include "services/RelayManager.hpp"
 #include "db/Database.hpp"
 
 #include <httplib.h>
@@ -300,6 +301,25 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
         try {
             auto rows = Database::instance().query(
                 "SELECT * FROM nodes ORDER BY added_at DESC");
+
+            // Also include relay-connected clients as virtual nodes
+            auto relayClients = RelayManager::instance().getClients();
+            for (const auto& rc : relayClients) {
+                nlohmann::json rn;
+                rn["id"] = rc.id;
+                rn["ip"] = "relay";
+                rn["port"] = 0;
+                rn["domain"] = "";
+                rn["label"] = rc.label + " (relay)";
+                rn["status"] = rc.connected ? "connected" : "unreachable";
+                rn["version"] = rc.version;
+                rn["workspace"] = rc.workspace;
+                rn["last_seen"] = std::to_string(rc.lastSeen);
+                rn["added_at"] = std::to_string(rc.connectedAt);
+                rn["is_relay"] = true;
+                rows.push_back(rn);
+            }
+
             nlohmann::json j;
             j["nodes"] = rows;
             res.set_content(j.dump(), "application/json");
@@ -475,11 +495,17 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
 
     svr.Post(R"(/api/nodes/([^/]+)/chat)", [ctx](const httplib::Request& req, httplib::Response& res) {
         std::string nodeId = req.matches[1];
-        auto row = Database::instance().queryOne("SELECT * FROM nodes WHERE id = ?1", {nodeId});
-        if (row.is_null()) {
-            res.status = 404;
-            res.set_content(R"({"error":"node not found"})", "application/json");
-            return;
+
+        // Check if this is a relay client first
+        bool isRelay = RelayManager::instance().isRelayClient(nodeId);
+
+        if (!isRelay) {
+            auto row = Database::instance().queryOne("SELECT * FROM nodes WHERE id = ?1", {nodeId});
+            if (row.is_null()) {
+                res.status = 404;
+                res.set_content(R"({"error":"node not found"})", "application/json");
+                return;
+            }
         }
 
         nlohmann::json body;
@@ -498,6 +524,41 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
             return;
         }
 
+        // For relay clients, route through the relay system
+        if (isRelay) {
+            auto& rm = RelayManager::instance();
+            auto relayReq = rm.queueChatRequest(nodeId, message, model, session);
+            if (!relayReq) {
+                res.status = 502;
+                res.set_content(R"({"error":"relay client not connected"})", "application/json");
+                return;
+            }
+
+            auto rq = relayReq->responseQueue;
+            res.set_header("Cache-Control", "no-cache");
+            res.set_header("Connection", "keep-alive");
+            res.set_header("Access-Control-Allow-Origin", "*");
+
+            res.set_chunked_content_provider(
+                "text/event-stream",
+                [rq](size_t, httplib::DataSink& sink) -> bool {
+                    std::unique_lock<std::mutex> lock(rq->mu);
+                    rq->cv.wait_for(lock, std::chrono::seconds(60),
+                        [&] { return !rq->chunks.empty() || rq->done; });
+                    while (!rq->chunks.empty()) {
+                        std::string chunk = std::move(rq->chunks.front());
+                        rq->chunks.pop();
+                        lock.unlock();
+                        if (!sink.write(chunk.data(), chunk.size())) return false;
+                        lock.lock();
+                    }
+                    if (rq->done && rq->chunks.empty()) { sink.done(); return false; }
+                    return true;
+                });
+            return;
+        }
+
+        auto row = Database::instance().queryOne("SELECT * FROM nodes WHERE id = ?1", {nodeId});
         NodeInfo ni = nodeFromRow(row);
 
         struct EventQueue {

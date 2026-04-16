@@ -67,6 +67,7 @@ notes:(function(){try{return JSON.parse(localStorage.getItem('ava_notes')||'[]')
 usageData:null,
 hasXaiKey:false,
 extraModel:'',
+mediaModel:'',
 maxOutputTokens:parseInt(localStorage.getItem('ava_max_output_tokens'))||0,
 contextTokenLimit:parseInt(localStorage.getItem('ava_context_token_limit'))||0,
 reasoningEffort:localStorage.getItem('ava_reasoning_effort')||'high',
@@ -1148,6 +1149,19 @@ return o;
 window.setExtraModel=function(v){
 S.extraModel=v;
 api('/api/settings',{method:'POST',body:{extra_model:v}}).catch(function(){});
+};
+function renderMediaModelOptions(){
+var o='';
+for(var i=0;i<S.models.length;i++){
+var m=S.models[i];
+if(m.type!=='image_gen')continue;
+o+='<option value="'+esc(m.id)+'"'+(m.id===S.mediaModel?' selected':'')+'>'+esc(m.name||m.id)+'</option>';
+}
+return o;
+}
+window.setMediaModel=function(v){
+S.mediaModel=v;
+api('/api/settings',{method:'POST',body:{media_model:v}}).catch(function(){});
 };
 
 function renderMediaSettings(){
@@ -3963,6 +3977,13 @@ renderSettingsMediaOpts()+
 '<option value=""'+((!S.extraModel)?' selected':'')+'>Same as primary</option>'+
 renderExtraModelOptions()+
 '</select></div></div>'+
+'<div class="set-section"><h3>'+ic('image',16)+' Media Model</h3>'+
+'<p style="font-size:.8125rem;color:var(--text-muted);margin:0 0 .5rem">Used for image generation tasks: app icons, thumbnails, and creative assets.</p>'+
+'<div class="set-row"><span class="set-label">Model</span><select id="mediaModelSelect" onchange="setMediaModel(this.value)">'+
+'<option value=""'+((!S.mediaModel)?' selected':'')+'>Default (grok-imagine-image)</option>'+
+renderMediaModelOptions()+
+'</select></div></div>'+
+renderNodeRoleSection()+
 '<div class="set-section"><h3>'+ic('folder',16)+' Workspace</h3>'+
 '<div class="set-row"><span class="set-label">Directory</span>'+
 '<div style="display:flex;gap:.5rem;flex:1">'+
@@ -4019,6 +4040,65 @@ return '<div style="margin-top:.75rem;padding-top:.75rem;border-top:1px solid va
 return '';
 }
 
+
+function renderNodeRoleSection(){
+var role=S.nodeRole||'standalone';
+var h='<div class="set-section"><h3>'+ic('globe',16)+' Node Role</h3>'+
+'<p style="font-size:.8125rem;color:var(--text-muted);margin:0 0 .5rem">'+
+'Configure this node as a server (accept relay clients) or client (connect to a remote server behind a firewall).</p>'+
+'<div class="set-row"><span class="set-label">Role</span>'+
+'<div style="display:flex;gap:.375rem">'+
+'<button id="roleStandalone" class="btn-sm'+(role==='standalone'?' active':'')+'" onclick="setNodeRole(\'standalone\')" style="'+(role==='standalone'?'background:rgba(168,85,247,.2);border-color:#a855f7;color:#c4b5fd':'')+'">Standalone</button>'+
+'<button id="roleServer" class="btn-sm'+(role==='server'?' active':'')+'" onclick="setNodeRole(\'server\')" style="'+(role==='server'?'background:rgba(56,189,248,.2);border-color:#38bdf8;color:#7dd3fc':'')+'">'+ic('server',12)+' Server</button>'+
+'<button id="roleClient" class="btn-sm'+(role==='client'?' active':'')+'" onclick="setNodeRole(\'client\')" style="'+(role==='client'?'background:rgba(74,222,128,.2);border-color:#4ade80;color:#86efac':'')+'">'+ic('monitor',12)+' Client</button>'+
+'</div></div>';
+if(role==='client'){
+h+='<div class="set-row"><span class="set-label">Server URL</span>'+
+'<input class="set-input" id="relayServerInput" value="'+esc(S.relayServer||'')+'" placeholder="https://devacos.avalynn.ai"></div>'+
+'<div class="set-row"><span class="set-label">Relay Token</span>'+
+'<input class="set-input" id="relayTokenInput" type="password" placeholder="Shared relay token"></div>'+
+'<div class="set-row"><span class="set-label">Status</span>'+
+'<span class="set-value" id="relayClientStatus">'+
+(S.hasRelayToken?'<span style="color:#4ade80">Token configured</span>':'<span style="color:#f87171">No token set</span>')+
+'</span></div>'+
+'<button class="btn-sm" onclick="saveRelaySettings()" style="margin-top:.5rem">'+ic('save',12)+' Save Relay Settings</button>';
+} else if(role==='server'){
+h+='<div class="set-row"><span class="set-label">Accept Token</span>'+
+'<input class="set-input" id="relayTokenInput" type="password" placeholder="Token that clients must present" value=""></div>'+
+'<div class="set-row"><span class="set-label">Connected Clients</span>'+
+'<span class="set-value" id="relayClientCount">…</span></div>'+
+'<button class="btn-sm" onclick="saveRelaySettings()" style="margin-top:.5rem">'+ic('save',12)+' Save Relay Settings</button>';
+api('/api/relay/clients',{silent:true}).then(function(d){
+var el=document.getElementById('relayClientCount');
+if(el&&d&&d.clients){
+var connected=d.clients.filter(function(c){return c.connected;});
+el.textContent=connected.length+' connected'+(connected.length?(' — '+connected.map(function(c){return c.label;}).join(', ')):'');
+}
+}).catch(function(){});
+}
+h+='</div>';
+return h;
+}
+window.setNodeRole=function(role){
+S.nodeRole=role;
+api('/api/settings',{method:'POST',body:{node_role:role}}).then(function(){
+toast('Node role set to '+role,'success');
+render();
+}).catch(function(e){toast('Error: '+(e.message||'failed'),'error');});
+};
+window.saveRelaySettings=function(){
+var serverEl=document.getElementById('relayServerInput');
+var tokenEl=document.getElementById('relayTokenInput');
+var body={node_role:S.nodeRole||'standalone'};
+if(serverEl)body.relay_server=serverEl.value.trim();
+if(tokenEl&&tokenEl.value)body.relay_token=tokenEl.value;
+api('/api/settings',{method:'POST',body:body}).then(function(){
+toast('Relay settings saved — restart the service for changes to take effect','success');
+if(body.relay_server!==undefined)S.relayServer=body.relay_server;
+if(body.relay_token)S.hasRelayToken=true;
+render();
+}).catch(function(e){toast('Error: '+(e.message||'failed'),'error');});
+};
 
 window.clearStoredXaiKey=function(){
 avaConfirm('Remove the xAI API key from ~/.avacli/settings.json? (Environment variable may still apply.)',function(){
@@ -4362,7 +4442,7 @@ window.genAppIcon=function(id,name){
 avaPrompt('Describe the icon you want:','A modern minimalist app icon for '+name,function(desc){
 if(!desc||!desc.trim())return;
 toast('Generating icon...','info');
-api('/api/apps/'+encodeURIComponent(id)+'/generate-icon',{method:'POST',body:{prompt:desc.trim(),model:'grok-2-image',size:'1024x1024'}}).then(function(d){
+api('/api/apps/'+encodeURIComponent(id)+'/generate-icon',{method:'POST',body:{prompt:desc.trim(),model:S.mediaModel||'',size:'1024x1024'}}).then(function(d){
 if(d&&d.icon_url){toast('Icon set!','success');appsState.apps=null;render();}
 else toast('No image returned','error');
 }).catch(function(e){toast('Failed: '+(e.message||'error'),'error');});
@@ -5009,6 +5089,10 @@ if(d){
 S.status=d;S.model=S.model||d.model||'';S.session=localStorage.getItem('ava_last_session')||S.session||d.session||'';
 S.hasXaiKey=!!d.has_xai_key;
 if(d.extra_model)S.extraModel=d.extra_model;
+if(d.media_model)S.mediaModel=d.media_model;
+if(d.node_role)S.nodeRole=d.node_role;
+if(d.relay_server)S.relayServer=d.relay_server;
+S.hasRelayToken=!!d.has_relay_token;
 }
 return api('/api/models',{silent:true});
 }).then(function(m){

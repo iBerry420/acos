@@ -197,6 +197,17 @@ void mergeServeDiskIntoConfig(ServeConfig& sc) {
     }
     if (j.contains("extra_model") && j["extra_model"].is_string())
         sc.extraModel = j["extra_model"].get<std::string>();
+    if (j.contains("media_model") && j["media_model"].is_string())
+        sc.mediaModel = j["media_model"].get<std::string>();
+    if (j.contains("node_role") && j["node_role"].is_string()) {
+        std::string role = j["node_role"].get<std::string>();
+        if (role == "standalone" || role == "server" || role == "client")
+            sc.nodeRole = role;
+    }
+    if (j.contains("relay_server") && j["relay_server"].is_string())
+        sc.relayServer = j["relay_server"].get<std::string>();
+    if (j.contains("relay_token") && j["relay_token"].is_string())
+        sc.relayToken = j["relay_token"].get<std::string>();
     if (sc.uiTheme.empty() && j.contains("ui_theme") && j["ui_theme"].is_string())
         sc.uiTheme = j["ui_theme"].get<std::string>();
 }
