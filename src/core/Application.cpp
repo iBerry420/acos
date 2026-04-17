@@ -333,6 +333,7 @@ int Application::runServe() {
 
     ServeConfig sc;
     sc.port = config_.servePort;
+    sc.portExplicit = config_.servePortExplicit;
     sc.host = config_.serveHost;
     sc.model = config_.model;
     sc.workspace = config_.workspace;
@@ -344,8 +345,11 @@ int Application::runServe() {
     sc.uiTheme = config_.uiTheme;
 
     HttpServer server(sc);
-    server.start();
-    return 0;
+    // start() returns false when bind fails so the service manager
+    // (systemd Restart=always / docker restart) sees a non-zero exit
+    // and retries with a backoff, instead of avacli silently running
+    // on the wrong port behind an upstream proxy.
+    return server.start() ? 0 : 1;
 }
 
 int Application::run() {

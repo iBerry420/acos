@@ -10,6 +10,13 @@ namespace avacli {
 
 struct ServeConfig {
     int port = 8080;
+    // True when --port was passed explicitly on the command line (or the
+    // caller otherwise wants the port treated as a hard requirement).
+    // When set, HttpServer::start() will fail fast if the port is already
+    // in use instead of silently falling back to port+1 — upstream
+    // proxies (Apache/nginx/systemd sockets) always expect the configured
+    // port, so a fallback corrupts the deployment contract.
+    bool portExplicit = false;
     std::string host = "0.0.0.0";
     std::string model = "grok-4-1-reasoning";
     std::string workspace = ".";
@@ -35,7 +42,10 @@ public:
     explicit HttpServer(ServeConfig config);
     ~HttpServer();
 
-    void start();
+    // Returns true on clean shutdown, false if the server failed to bind
+    // (so the caller can propagate a non-zero exit status to the service
+    // manager and let it retry rather than running on the wrong port).
+    bool start();
     void stop();
 
 private:

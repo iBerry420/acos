@@ -41,17 +41,79 @@ HttpServer::HttpServer(ServeConfig config)
 
 HttpServer::~HttpServer() { stop(); }
 
-void HttpServer::start() {
+bool HttpServer::start() {
     Database::instance().init();
     masterKeyMgr_.loadSessionsFromDisk();
     setupRoutes();
     running_ = true;
 
-    int port = findAvailablePort(config_.port);
-    actualPort_ = port;
-    if (port != config_.port) {
-        spdlog::warn("Port {} in use — binding to port {} instead", config_.port, port);
+    // Enable SO_REUSEADDR on the listen socket so a quick systemctl
+    // restart doesn't stall for ~60s waiting for prior Apache-upstream
+    // connections to drain out of TIME_WAIT.
+    //
+    // Deliberately NOT setting SO_REUSEPORT: on Linux, SO_REUSEPORT lets
+    // multiple processes bind to the same port at once (it's the
+    // multi-worker load-balancing flag), which would mean a stray old
+    // avacli instance could silently share 9100 with the new one and
+    // randomly answer half of incoming requests from stale code. We
+    // want the exact opposite here — exclusive ownership, but with the
+    // kernel willing to re-bind over stale TIME_WAIT 4-tuples.
+    // SO_REUSEADDR alone gives us that on Linux.
+    //
+    // (socket_t is in the global namespace in httplib.h, not inside
+    // `httplib::`, so `auto` keeps this portable between its Windows
+    // (SOCKET) and POSIX (int) typedefs without us redeclaring it.)
+    impl_->svr.set_socket_options([](auto sock) {
+        int opt = 1;
+#ifdef _WIN32
+        // On Windows we pair SO_REUSEADDR with SO_EXCLUSIVEADDRUSE —
+        // REUSEADDR there has different semantics (it *does* allow
+        // concurrent listeners), and EXCLUSIVEADDRUSE pins the port to
+        // the current socket so we keep the "one live listener" contract.
+        ::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
+                     reinterpret_cast<const char*>(&opt), sizeof(opt));
+        ::setsockopt(sock, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+                     reinterpret_cast<const char*>(&opt), sizeof(opt));
+#else
+        ::setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#endif
+    });
+
+    // Resolve the port. Two modes:
+    //
+    //   (a) Explicit port (systemd service, Docker, or `--port` on the
+    //       CLI): bind exactly where we were told. If the port is in use
+    //       *even with* SO_REUSEADDR set, something else actually owns it
+    //       — falling back silently to port+1 would leave Apache 502-ing
+    //       at the configured port. Log an error and return so the
+    //       service manager (systemd Restart=always) can back off + retry.
+    //
+    //   (b) Default/ad-hoc port: keep the old convenience behavior where
+    //       we probe for the next free port so two dev instances can run
+    //       side-by-side without manual conflict resolution.
+    int port = config_.port;
+    if (config_.portExplicit) {
+        if (!impl_->svr.bind_to_port(config_.host, port)) {
+            spdlog::error("Failed to bind to {}:{} — port is in use or permission denied. "
+                          "Exiting so the service manager can retry.",
+                          config_.host, port);
+            LogBuffer::instance().error("system", "Avacli bind failed",
+                                        {{"host", config_.host}, {"port", port}});
+            running_ = false;
+            return false;
+        }
+    } else {
+        port = findAvailablePort(config_.port);
+        if (port != config_.port) {
+            spdlog::warn("Port {} in use — binding to port {} instead", config_.port, port);
+        }
+        if (!impl_->svr.bind_to_port(config_.host, port)) {
+            spdlog::error("Failed to bind to {}:{} — giving up.", config_.host, port);
+            running_ = false;
+            return false;
+        }
     }
+    actualPort_ = port;
 
     LogBuffer::instance().info("system", "Avacli server started", {{"port", port}, {"workspace", config_.workspace}});
     spdlog::info("Avacli serving at http://localhost:{}", port);
@@ -76,12 +138,13 @@ void HttpServer::start() {
         RelayClient::instance().start(config_.relayServer, config_.relayToken, port);
     }
 
-    impl_->svr.listen(config_.host, port);
+    impl_->svr.listen_after_bind();
 
     RelayClient::instance().stop();
     BatchPoller::instance().stop();
     MeshManager::instance().stop();
     running_ = false;
+    return true;
 }
 
 void HttpServer::stop() {

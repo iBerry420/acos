@@ -82,7 +82,7 @@ int main(int argc, char** argv) {
     bool uiInit = false;
 
     auto* serve_cmd = app.add_subcommand("serve", "Start HTTP server with web UI");
-    serve_cmd->add_option("--port,-p", config.servePort, "Server port")
+    auto* portOpt = serve_cmd->add_option("--port,-p", config.servePort, "Server port")
         ->default_val(8080);
     serve_cmd->add_option("--host", config.serveHost, "Bind host")
         ->default_val("0.0.0.0");
@@ -197,6 +197,9 @@ int main(int argc, char** argv) {
         config.uiDir = uiDir;
         config.useEmbeddedUI = useEmbeddedUI;
         config.uiTheme = uiTheme;
+        // Treat --port as a hard requirement only when the user actually
+        // passed it; otherwise leave the door open for ad-hoc fallback.
+        config.servePortExplicit = (portOpt->count() > 0);
     }
 
     config.mode = modeFromString(modeStr);

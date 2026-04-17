@@ -190,7 +190,7 @@ bool RelayClient::registerWithServer() {
 
     nlohmann::json body;
     body["label"] = label;
-    body["version"] = "2.3.4";
+    body["version"] = "2.3.5";
     body["workspace"] = "";
 
     auto resp = httpPost(serverUrl_ + "/api/relay/register", body.dump(), authToken_);

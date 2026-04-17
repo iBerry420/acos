@@ -1,3 +1,73 @@
+## [2.3.5] — 2026-04-17
+
+**Fix the port-fallback footgun that briefly 502'd devacos during the
+2.3.4 redeploy.**
+
+Symptom: restarting `avacli.service` while Apache had live upstream
+keep-alives open left port 9100 tied up in `TIME_WAIT` for ~60s. On
+the new process's first bind attempt the kernel rejected the port, at
+which point `findAvailablePort()` happily fell through to 9101 and
+the server started there — but Apache kept proxying to 9100, so
+`devacos.avalynn.ai` returned 502 Bad Gateway until the TIME_WAIT
+entries drained and a manual re-restart landed the listener back on
+9100. Two bugs in one place:
+
+1. **Wrong socket option on the listen socket.** httplib's
+   `default_socket_options` callback picks `SO_REUSEPORT` on Linux (or
+   `SO_REUSEADDR` as a fallback), but those two flags do very different
+   things here:
+   - `SO_REUSEPORT` is the multi-process load-balancing flag. If both
+     the old and new avacli set it, the kernel is *happy* to let them
+     both bind to 9100 at the same time and randomly splits requests
+     between them — actually *worse* than the original bug, because a
+     stale old binary would silently answer half the traffic. (Verified
+     this empirically with a local test — a second avacli instance
+     with `SO_REUSEPORT` set bound successfully next to the running
+     service.)
+   - `SO_REUSEADDR` is the "please rebind over a lingering TIME_WAIT
+     4-tuple" flag, which is what we actually need, and it enforces
+     exclusive ownership between live listeners.
+   We now install a custom `set_socket_options()` callback in
+   `HttpServer::start()` that sets `SO_REUSEADDR` only on Linux
+   (and `SO_REUSEADDR` + `SO_EXCLUSIVEADDRUSE` on Windows, since
+   Windows' `SO_REUSEADDR` has inverted semantics and needs the
+   `EXCLUSIVEADDRUSE` pin to keep single-listener behavior).
+2. **Silent fallback to port+1 when `--port` was explicit.** The
+   old `findAvailablePort()` + `svr.listen()` combo was fine for
+   ad-hoc `avacli serve` on a developer laptop (conflict-free
+   side-by-side dev instances), but wrong for a systemd-managed or
+   reverse-proxied deployment where the configured port is part of
+   the contract. `ServeConfig` now carries a `portExplicit` flag
+   (plumbed from a new `Config::servePortExplicit`, which `main.cpp`
+   populates from `CLI11`'s `->count()` on the `--port` option).
+   When set, `HttpServer::start()` calls `bind_to_port()` once and,
+   on failure, logs an error, sets `running_ = false`, and returns
+   `false`. `Application::runServe()` propagates that to exit code 1
+   so `Restart=always RestartSec=5` in the unit file does the right
+   thing — the service manager retries on a 5-second cadence and
+   Apache recovers on its own as soon as the port clears.
+
+Implementation notes:
+
+- The `HttpServer::start()` signature changed from `void` to `bool`.
+  Only in-process caller is `Application::runServe()`, which now does
+  `return server.start() ? 0 : 1;`.
+- Switched from `svr.listen(host, port)` to the split
+  `svr.bind_to_port(host, port)` → `svr.listen_after_bind()` pair so
+  we can check the bind return value and surface the failure *before*
+  blocking on `accept()`.
+- Kept the probe-for-next-free-port behavior intact for the
+  `portExplicit == false` path. `avacli serve` with no args still
+  hops to 8081/8082/… when 8080 is busy; only explicit `--port N`
+  now enforces a strict bind.
+
+No config or API changes — the fix is purely in how the server
+negotiates its own listen socket, so 2.3.5 is a drop-in for anything
+that was running 2.3.4.
+
+Bumped `RelayClient.cpp` and `RoutesInfra.cpp` version strings plus
+`.github/workflows/build.yml VERSION` to 2.3.5.
+
 ## [2.3.4] — 2026-04-17
 
 **Remote-UI iframe: make the proxy actually transparent.**
