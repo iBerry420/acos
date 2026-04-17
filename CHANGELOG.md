@@ -1,3 +1,45 @@
+## [2.3.7] — 2026-04-17
+
+**Fix the second Windows-CI blocker exposed after 2.3.6 let the build
+progress further.**
+
+2.3.6 fixed the bundle-script UnicodeEncodeError so the Windows build
+actually reached the compilation stage for the first time in the 2.3.x
+series. That revealed a pre-existing Windows portability bug that had
+been there since the 2.3.4 node-mesh commit and was hidden behind the
+bundling failure:
+
+```
+src\server\RoutesInfra.cpp(26,10): error C1083: Cannot open include file:
+  'unistd.h': No such file or directory
+```
+
+`<unistd.h>` is POSIX-only. The file needed it for a single call to
+`gethostname()` in `/api/hostname`, but on Windows `gethostname()` is
+declared in `<winsock2.h>`, which `<httplib.h>` (already included 13
+lines earlier) pulls in transitively. Every other TU in the codebase
+that touches POSIX headers already guards them with the project's
+standard `#ifndef _WIN32` idiom (see `ServerHelpers.cpp`,
+`RelayClient.cpp`, `Application.cpp`, `ProcessRunner.cpp`,
+`ProcessSupervisor.cpp`). `RoutesInfra.cpp` simply missed it during the
+heavy node-mesh rewrite.
+
+Fix is the one-liner guard the rest of the codebase already uses:
+
+```cpp
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+```
+
+No source-behavior change on Linux/macOS (`gethostname()` still resolves
+through `<unistd.h>` there). On Windows the declaration comes in
+transitively via `<httplib.h>` → `<winsock2.h>` so the one call site at
+line 75 compiles cleanly.
+
+Bumped `RelayClient.cpp` and `RoutesInfra.cpp` version strings plus
+`.github/workflows/build.yml VERSION` to 2.3.7.
+
 ## [2.3.6] — 2026-04-17
 
 **Fix Windows CI so `v*` tag pushes can actually publish a GitHub Release.**

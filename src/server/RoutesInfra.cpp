@@ -23,7 +23,10 @@
 #include <condition_variable>
 #include <queue>
 #include <atomic>
+
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 
 namespace avacli {
 
@@ -62,7 +65,7 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
     svr.Get("/api/health", [ctx](const httplib::Request&, httplib::Response& res) {
         nlohmann::json j;
         j["status"] = "ok";
-        j["version"] = "2.3.6";
+        j["version"] = "2.3.7";
         j["workspace"] = ctx.config ? ctx.config->workspace : "";
         j["uptime_s"] = 0; // TODO: track real uptime
         j["port"] = ctx.actualPort ? *ctx.actualPort : 0;
