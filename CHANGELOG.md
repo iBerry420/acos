@@ -1,3 +1,49 @@
+## [2.3.6] — 2026-04-17
+
+**Fix Windows CI so `v*` tag pushes can actually publish a GitHub Release.**
+
+After tagging `v2.3.4` and `v2.3.5` I noticed both prior `main`-branch CI
+runs had failed identically on the Windows job (Linux and both macOS
+targets were green). Root cause turned out to be entirely cosmetic but
+release-blocking:
+
+- `scripts/bundle-default-prompt.py` and `scripts/bundle-ui.py` both
+  print a success line ending in `... → src/server/<file>.hpp ...`
+  after writing out the generated header. The bundling step *itself*
+  succeeded on Windows (the `.hpp` files were written correctly — CI
+  logs confirm `Processed ...: 187 original lines` / `6387 original
+  lines, 31 splits inserted`). But Python 3.14 on the hosted Windows
+  runner defaults `sys.stdout` to `cp1252`, which can't encode `\u2192`
+  (`→`). The final `print()` raised `UnicodeEncodeError`, returning
+  exit 1, which MSBuild surfaces as a custom-build failure — so the
+  whole `avacli` target fails to link even though every input was
+  already on disk.
+
+Fix is a one-liner per script: reconfigure stdout to UTF-8 with a
+fallback replace-error strategy, guarded by `try / except
+(AttributeError, ValueError)` so it's a no-op on older Pythons or if
+stdout isn't a `TextIOWrapper`. Keeps the nicer `→` in Linux/macOS
+output, stops crashing on Windows.
+
+```python
+try:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+except (AttributeError, ValueError):
+    pass
+```
+
+Because all four platform build jobs have to pass before the workflow's
+`release` job fires (`needs: [build-linux, build-macos-arm64,
+build-macos-x86_64, build-windows]`), the v2.3.4 and v2.3.5 tag pushes
+both ended up with no GitHub Release auto-created. 2.3.6 is the first
+tag in the 2.3.x series where the release workflow should finish end to
+end and produce the multi-platform tarballs + `SHA256SUMS.txt` on the
+GitHub Releases page. No runtime difference vs. 2.3.5 — same source,
+same embedded prompt, same embedded UI.
+
+Bumped `RelayClient.cpp` and `RoutesInfra.cpp` version strings plus
+`.github/workflows/build.yml VERSION` to 2.3.6.
+
 ## [2.3.5] — 2026-04-17
 
 **Fix the port-fallback footgun that briefly 502'd devacos during the

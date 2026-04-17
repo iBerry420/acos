@@ -27,6 +27,11 @@ import os
 import subprocess
 import sys
 
+try:
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+except (AttributeError, ValueError):
+    pass
+
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 PROMPT_SRC = os.path.join(ROOT, 'GROK_SYSTEM_PROMPT.md')
 OUT = os.path.join(ROOT, 'src', 'server', 'DefaultSystemPrompt.hpp')
