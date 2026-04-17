@@ -23,6 +23,7 @@
 #include <condition_variable>
 #include <queue>
 #include <atomic>
+#include <unistd.h>
 
 namespace avacli {
 
@@ -61,10 +62,19 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
     svr.Get("/api/health", [ctx](const httplib::Request&, httplib::Response& res) {
         nlohmann::json j;
         j["status"] = "ok";
-        j["version"] = "2.3.0";
+        j["version"] = "2.3.4";
         j["workspace"] = ctx.config ? ctx.config->workspace : "";
         j["uptime_s"] = 0; // TODO: track real uptime
         j["port"] = ctx.actualPort ? *ctx.actualPort : 0;
+        res.set_content(j.dump(), "application/json");
+    });
+
+    // Hostname (pure UX aid for node UIs that want to say "you are connecting to X")
+    svr.Get("/api/hostname", [](const httplib::Request&, httplib::Response& res) {
+        char buf[256] = {0};
+        gethostname(buf, sizeof(buf) - 1);
+        nlohmann::json j;
+        j["hostname"] = std::string(buf);
         res.set_content(j.dump(), "application/json");
     });
 
@@ -663,11 +673,104 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
     });
 
     // ── Remote UI Proxy ─────────────────────────────────────────
+    //
+    // Design: show the remote node's UI inside an iframe on this client, transparently
+    // routing every XHR/fetch/SSE/WebSocket from the iframe through /api/nodes/:id/proxy/*.
+    //
+    // The tricky bit: the remote's app.js calls `fetch(path)` where path is a variable,
+    // which a server-side text rewriter can't reliably find. We used to only rewrite
+    // literal `fetch('/...')` in the HTML — which missed app.js entirely and missed every
+    // indirection through helper wrappers like api(). That caused the iframe to render
+    // the remote HTML shell but silently fetch *this* client's data (local workspace,
+    // local sessions, local models, local auth) — which is what the user was seeing.
+    //
+    // The fix is a tiny client-side shim injected at the top of the remote's <head>.
+    // It monkey-patches fetch/XMLHttpRequest/EventSource/WebSocket so any absolute-path
+    // URL starting with `/` is rewritten to `/api/nodes/:id/proxy<path>`. The shim also
+    // shadows window.localStorage with a per-iframe in-memory store so the iframe's
+    // session/token state doesn't collide with the parent page's.
 
-    svr.Get(R"(/api/nodes/([^/]+)/proxy/(.*))", [](const httplib::Request& req, httplib::Response& res) {
+    auto proxyShim = [](const std::string& nodeId) {
+        // Kept inline and minified — this runs before anything else loads in the iframe.
+        // Uses only widely-supported JS (IE11+ style) to match the rest of the UI code.
+        std::string pfx = "/api/nodes/" + nodeId + "/proxy";
+        std::string js;
+        js.reserve(3072);
+        js += "<script>(function(){";
+        js += "var PFX=" + nlohmann::json(pfx).dump() + ";";
+        js += "function rw(u){"
+              "if(typeof u!=='string')return u;"
+              "if(u.charAt(0)!=='/')return u;"
+              "if(u.indexOf(PFX)===0)return u;"
+              "if(u.indexOf('//')===0)return u;"
+              "return PFX+u;"
+              "}";
+        // fetch
+        js += "var _f=window.fetch;"
+              "window.fetch=function(i,n){"
+              "try{"
+              "if(typeof i==='string')i=rw(i);"
+              "else if(i&&typeof i.url==='string'){var ru=rw(i.url);if(ru!==i.url)i=new Request(ru,i);}"
+              "}catch(e){}"
+              "return _f.call(this,i,n);"
+              "};";
+        // XMLHttpRequest
+        js += "var _xo=XMLHttpRequest.prototype.open;"
+              "XMLHttpRequest.prototype.open=function(m,u){"
+              "try{if(typeof u==='string')arguments[1]=rw(u);}catch(e){}"
+              "return _xo.apply(this,arguments);"
+              "};";
+        // EventSource
+        js += "if(window.EventSource){"
+              "var _es=window.EventSource;"
+              "function _ES(u,c){return new _es(rw(u),c);}"
+              "_ES.prototype=_es.prototype;"
+              "_ES.CONNECTING=_es.CONNECTING;_ES.OPEN=_es.OPEN;_ES.CLOSED=_es.CLOSED;"
+              "window.EventSource=_ES;"
+              "}";
+        // WebSocket — translate ws://this.host/foo to ws://this.host/PFX/foo if path-absolute
+        js += "if(window.WebSocket){"
+              "var _ws=window.WebSocket;"
+              "function _WS(u,p){"
+              "try{if(typeof u==='string'&&/^wss?:\\/\\//.test(u)){"
+              "var m=u.match(/^(wss?:\\/\\/[^/]+)(\\/.*)?$/);"
+              "if(m&&m[2]&&m[2].indexOf(PFX)!==0)u=m[1]+PFX+m[2];"
+              "}}catch(e){}"
+              "return p?new _ws(u,p):new _ws(u);"
+              "}"
+              "_WS.prototype=_ws.prototype;_WS.CONNECTING=0;_WS.OPEN=1;_WS.CLOSING=2;_WS.CLOSED=3;"
+              "window.WebSocket=_WS;"
+              "}";
+        // Shadow localStorage & sessionStorage with per-iframe stores. Seeds a dummy
+        // token so the remote UI treats the iframe as "logged in" — the proxy route
+        // itself doesn't validate the forwarded token, we authenticate to the remote
+        // using the node's stored admin token on the server side.
+        js += "(function(){"
+              "var _s={avacli_token:'proxy',ava_token:'proxy'};"
+              "function mk(s){"
+              "var st={"
+              "getItem:function(k){return s[k]!==undefined?s[k]:null;},"
+              "setItem:function(k,v){s[k]=String(v);},"
+              "removeItem:function(k){delete s[k];},"
+              "clear:function(){for(var k in s)delete s[k];},"
+              "key:function(i){return Object.keys(s)[i]||null;}"
+              "};"
+              "Object.defineProperty(st,'length',{get:function(){return Object.keys(s).length;}});"
+              "return st;"
+              "}"
+              "try{Object.defineProperty(window,'localStorage',{configurable:true,get:function(){return mk(_s);}});}catch(e){}"
+              "try{var _ss={};Object.defineProperty(window,'sessionStorage',{configurable:true,get:function(){return mk(_ss);}});}catch(e){}"
+              "})();";
+        js += "})();</script>";
+        return js;
+    };
+
+    svr.Get(R"(/api/nodes/([^/]+)/proxy/?(.*))", [proxyShim](const httplib::Request& req, httplib::Response& res) {
         std::string nodeId = req.matches[1];
         std::string path = "/" + std::string(req.matches[2]);
-        if (path == "/") path = "/";
+        // Forward the query string so remote endpoints that paginate / filter still work.
+        auto q = req.target.find('?');
+        if (q != std::string::npos) path += req.target.substr(q);
 
         auto row = Database::instance().queryOne("SELECT * FROM nodes WHERE id = ?1", {nodeId});
         if (row.is_null()) {
@@ -687,37 +790,36 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
             return;
         }
 
-        // Rewrite URLs in HTML responses to go through the proxy
         if (contentType.find("text/html") != std::string::npos) {
             std::string prefix = "/api/nodes/" + nodeId + "/proxy";
-            // Rewrite absolute paths in src/href attributes
+
+            // Keep rewriting static src/href attributes so non-JS paths (<img>, stylesheet
+            // links, favicons) still resolve through the proxy for browsers/tools that
+            // don't execute the shim (e.g. initial paint, view-source).
             auto rewrite = [&](const std::string& attr) {
                 std::string needle = attr + "=\"/";
                 size_t pos = 0;
                 while ((pos = body.find(needle, pos)) != std::string::npos) {
-                    pos += attr.size() + 2; // move past attr="
-                    if (body.substr(pos, prefix.size()) == prefix.substr(1))
-                        continue; // already rewritten
+                    pos += attr.size() + 2;
+                    if (body.substr(pos, prefix.size() - 1) == prefix.substr(1)) continue;
                     body.insert(pos, prefix);
                     pos += prefix.size();
                 }
             };
             rewrite("src");
             rewrite("href");
-            // Rewrite fetch('/api/...' calls
-            size_t pos = 0;
-            std::string fetchNeedle = "fetch('/";
-            while ((pos = body.find(fetchNeedle, pos)) != std::string::npos) {
-                pos += 7; // move past fetch('
-                body.insert(pos, prefix);
-                pos += prefix.size();
-            }
-            pos = 0;
-            fetchNeedle = "fetch(\"/";
-            while ((pos = body.find(fetchNeedle, pos)) != std::string::npos) {
-                pos += 7;
-                body.insert(pos, prefix);
-                pos += prefix.size();
+
+            // Inject the shim as the very first child of <head>. It MUST run before any
+            // other script on the page for the fetch/XHR/EventSource wrappers to take effect.
+            std::string shim = proxyShim(nodeId);
+            size_t headPos = body.find("<head");
+            if (headPos != std::string::npos) {
+                size_t gt = body.find('>', headPos);
+                if (gt != std::string::npos) body.insert(gt + 1, shim);
+                else body.insert(0, shim);
+            } else {
+                // No <head>? Prepend and hope the browser tolerates a script before <html>.
+                body.insert(0, shim);
             }
         }
 
@@ -725,10 +827,16 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
         res.set_content(body, contentType.c_str());
     });
 
-    // Also proxy POST requests for API calls from the remote UI
-    svr.Post(R"(/api/nodes/([^/]+)/proxy/(.*))", [](const httplib::Request& req, httplib::Response& res) {
+    // Transparent streaming POST proxy. Does NOT buffer-and-JSON-parse the upstream
+    // response — that's what broke chat streaming previously (a text/event-stream reply
+    // was silently replaced with `{"error":"invalid JSON"}` after 30s). Instead we run
+    // the upstream request in a worker thread and pipe raw bytes to the browser via
+    // set_chunked_content_provider so SSE tokens arrive live.
+    svr.Post(R"(/api/nodes/([^/]+)/proxy/?(.*))", [](const httplib::Request& req, httplib::Response& res) {
         std::string nodeId = req.matches[1];
         std::string path = "/" + std::string(req.matches[2]);
+        auto q = req.target.find('?');
+        if (q != std::string::npos) path += req.target.substr(q);
 
         auto row = Database::instance().queryOne("SELECT * FROM nodes WHERE id = ?1", {nodeId});
         if (row.is_null()) {
@@ -738,13 +846,78 @@ void registerInfraRoutes(httplib::Server& svr, ServerContext ctx) {
         }
 
         NodeInfo ni = nodeFromRow(row);
-        NodeClient client(ni);
-        nlohmann::json body;
-        try { body = nlohmann::json::parse(req.body); } catch (...) {
-            body = nlohmann::json::object();
+
+        struct ChunkQueue {
+            std::mutex mu;
+            std::condition_variable cv;
+            std::queue<std::string> chunks;
+            bool done = false;
+            bool headersReady = false;
+            long status = 0;
+            std::string contentType;
+        };
+        auto cq = std::make_shared<ChunkQueue>();
+        std::string bodyCopy = req.body;
+        std::string reqCt = req.get_header_value("Content-Type");
+        if (reqCt.empty()) reqCt = "application/json";
+
+        std::thread([cq, ni, path, bodyCopy, reqCt]() {
+            NodeClient client(ni);
+            client.proxyRawPost(path, bodyCopy, reqCt,
+                [cq](long status, const std::string& ct) {
+                    {
+                        std::lock_guard<std::mutex> lock(cq->mu);
+                        cq->status = status;
+                        cq->contentType = ct;
+                        cq->headersReady = true;
+                    }
+                    cq->cv.notify_all();
+                },
+                [cq](const std::string& chunk) {
+                    {
+                        std::lock_guard<std::mutex> lock(cq->mu);
+                        cq->chunks.push(chunk);
+                    }
+                    cq->cv.notify_all();
+                });
+            {
+                std::lock_guard<std::mutex> lock(cq->mu);
+                cq->done = true;
+                if (!cq->headersReady) cq->headersReady = true;
+            }
+            cq->cv.notify_all();
+        }).detach();
+
+        // Block up to 30s for upstream headers so we can set our status + content-type
+        // before the browser starts reading. Past that, fall through with whatever we got.
+        {
+            std::unique_lock<std::mutex> lock(cq->mu);
+            cq->cv.wait_for(lock, std::chrono::seconds(30),
+                [&] { return cq->headersReady || cq->done; });
         }
-        auto result = client.proxyPost(path, body);
-        res.set_content(result.dump(), "application/json");
+
+        std::string ct = cq->contentType.empty() ? std::string("application/octet-stream") : cq->contentType;
+        if (cq->status > 0) res.status = (int)cq->status;
+
+        res.set_header("Cache-Control", "no-cache");
+        res.set_header("Access-Control-Allow-Origin", "*");
+
+        res.set_chunked_content_provider(
+            ct.c_str(),
+            [cq](size_t, httplib::DataSink& sink) -> bool {
+                std::unique_lock<std::mutex> lock(cq->mu);
+                cq->cv.wait_for(lock, std::chrono::seconds(60),
+                    [&] { return !cq->chunks.empty() || cq->done; });
+                while (!cq->chunks.empty()) {
+                    std::string c = std::move(cq->chunks.front());
+                    cq->chunks.pop();
+                    lock.unlock();
+                    if (!sink.write(c.data(), c.size())) return false;
+                    lock.lock();
+                }
+                if (cq->done && cq->chunks.empty()) { sink.done(); return false; }
+                return true;
+            });
     });
 }
 

@@ -59,10 +59,48 @@ chmod 755 "$PKG_DIR/DEBIAN/postinst"
 cat > "$PKG_DIR/DEBIAN/prerm" << 'EOF'
 #!/bin/sh
 set -e
-# Stop any running avacli instances
-pkill -f "avacli" 2>/dev/null || true
+
+# NOTE: do NOT use `pkill -f avacli` here. `-f` matches against the full
+# command line of every process, which means it also matches apt/dpkg
+# (whose argv contains "avacli_<ver>_amd64.deb") and this prerm script
+# itself (`/var/lib/dpkg/info/avacli.prerm`). Running it SIGTERMs dpkg
+# mid-unpack and leaves the package in a "very bad inconsistent state".
+# Use `pkill -x` (exact process-name match) instead.
+
+case "$1" in
+    remove|deconfigure)
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl stop avacli.service 2>/dev/null || true
+        fi
+        pkill -x avacli 2>/dev/null || true
+        ;;
+    upgrade|failed-upgrade)
+        # On upgrade the binary is replaced atomically; running instances
+        # keep executing the old inode and users can restart at their
+        # leisure. Intentionally do NOT kill here.
+        :
+        ;;
+esac
+
+exit 0
 EOF
 chmod 755 "$PKG_DIR/DEBIAN/prerm"
+
+cat > "$PKG_DIR/DEBIAN/postrm" << 'EOF'
+#!/bin/sh
+set -e
+
+case "$1" in
+    purge)
+        # Clean up per-user state only on explicit purge. User data lives
+        # under $HOME/.avacli which we deliberately do not touch here.
+        :
+        ;;
+esac
+
+exit 0
+EOF
+chmod 755 "$PKG_DIR/DEBIAN/postrm"
 
 cat > "$PKG_DIR/usr/share/doc/$PKG_NAME/copyright" << EOF
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/

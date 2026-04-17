@@ -1,6 +1,7 @@
 #include "server/Routes.hpp"
 #include "server/ServerContext.hpp"
 #include "server/ServerHelpers.hpp"
+#include "server/DefaultSystemPrompt.hpp"
 #include "client/XAIClient.hpp"
 #include "config/ModelRegistry.hpp"
 #include "tools/ToolRegistry.hpp"
@@ -14,10 +15,13 @@
 #include <fstream>
 #include <chrono>
 #include <algorithm>
+#include <mutex>
 
 namespace avacli {
 
 namespace fs = std::filesystem;
+
+static constexpr const char* kDefaultBlueprintId = "default";
 
 static std::string blueprintsDir() {
     return (fs::path(userHomeDirectoryOrFallback()) / ".avacli" / "blueprints").string();
@@ -32,20 +36,114 @@ static int64_t nowEpoch() {
         std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
+/// Write (or overwrite) the canonical default blueprint on disk. Always
+/// keyed as id="default" so the UI can render a "Default" badge and so
+/// POST /api/system/blueprints/reset always targets the same file.
+static bool writeDefaultBlueprint(std::string* errOut = nullptr) {
+    try {
+        auto dir = blueprintsDir();
+        fs::create_directories(dir);
+
+        auto bp = nlohmann::json::parse(getDefaultBlueprintJson());
+        bp["is_default"] = true;
+        bp["updated_at"] = nowEpoch();
+        if (!bp.contains("created_at")) bp["created_at"] = nowEpoch();
+
+        auto path = (fs::path(dir) / (std::string(kDefaultBlueprintId) + ".json")).string();
+        std::ofstream ofs(path);
+        if (!ofs) {
+            if (errOut) *errOut = "cannot write " + path;
+            return false;
+        }
+        ofs << bp.dump(2);
+        return true;
+    } catch (const std::exception& e) {
+        if (errOut) *errOut = e.what();
+        return false;
+    }
+}
+
+/// Run once per process: seed `~/.avacli/blueprints/default.json` if missing
+/// so fresh installs have something selectable on the System page. Idempotent;
+/// cheap on subsequent calls (fs::exists check only).
+static void seedDefaultsOnceIfMissing() {
+    static std::once_flag flag;
+    std::call_once(flag, [] {
+        try {
+            auto path = (fs::path(blueprintsDir()) /
+                         (std::string(kDefaultBlueprintId) + ".json")).string();
+            if (!fs::exists(path)) {
+                std::string err;
+                if (writeDefaultBlueprint(&err)) {
+                    spdlog::info("Seeded default blueprint at {}", path);
+                } else {
+                    spdlog::warn("Failed to seed default blueprint: {}", err);
+                }
+            }
+        } catch (const std::exception& e) {
+            spdlog::warn("seedDefaultsOnceIfMissing: {}", e.what());
+        }
+    });
+}
+
 void registerSystemRoutes(httplib::Server& svr, ServerContext ctx) {
 
-    // Get active system prompt
+    // Seed ~/.avacli/blueprints/default.json at server startup so fresh
+    // installs have the Default Coding Agent already in the list.
+    // Idempotent; only writes when the file doesn't already exist.
+    seedDefaultsOnceIfMissing();
+
+    // Get active system prompt. If the workspace file doesn't exist
+    // (e.g. fresh install, user hasn't saved yet), return the embedded
+    // default so the UI has something to show instead of an empty textarea.
+    // `is_default=true` lets the UI indicate "you're viewing the shipped default".
     svr.Get("/api/system/prompt", [ctx](const httplib::Request&, httplib::Response& res) {
         auto path = activePromptPath(ctx.config->workspace);
         std::string content;
+        bool isDefault = false;
         if (fs::exists(path)) {
             std::ifstream ifs(path);
             if (ifs) content.assign(std::istreambuf_iterator<char>(ifs),
                                      std::istreambuf_iterator<char>());
         }
+        if (content.empty()) {
+            content = getDefaultSystemPrompt();
+            isDefault = true;
+        }
         nlohmann::json j;
         j["prompt"] = content;
         j["path"] = path;
+        j["is_default"] = isDefault;
+        res.set_content(j.dump(), "application/json");
+    });
+
+    // Preview the embedded default prompt without touching disk.
+    svr.Get("/api/system/prompt/default", [](const httplib::Request&, httplib::Response& res) {
+        nlohmann::json j;
+        j["prompt"] = getDefaultSystemPrompt();
+        j["is_default"] = true;
+        res.set_content(j.dump(), "application/json");
+    });
+
+    // Reset the workspace system prompt to the embedded default.
+    // Overwrites GROK_SYSTEM_PROMPT.md in the workspace with the baked-in
+    // copy from GROK_SYSTEM_PROMPT.md at build time.
+    svr.Post("/api/system/prompt/reset", [ctx](const httplib::Request&, httplib::Response& res) {
+        auto path = activePromptPath(ctx.config->workspace);
+        auto content = getDefaultSystemPrompt();
+        std::ofstream ofs(path);
+        if (!ofs) {
+            res.status = 500;
+            res.set_content(R"({"error":"cannot write prompt file"})", "application/json");
+            return;
+        }
+        ofs << content;
+        ofs.close();
+        nlohmann::json j;
+        j["reset"] = true;
+        j["prompt"] = content;
+        j["path"] = path;
+        j["is_default"] = true;
         res.set_content(j.dump(), "application/json");
     });
 
@@ -70,9 +168,38 @@ void registerSystemRoutes(httplib::Server& svr, ServerContext ctx) {
         res.set_content(R"({"saved":true})", "application/json");
     });
 
-    // List blueprints
+    // Restore the canonical "Default Coding Agent" blueprint. Overwrites
+    // ~/.avacli/blueprints/default.json with the baked-in copy so the user
+    // always has a reset target if they've edited or deleted it.
+    // Registered before the /api/system/blueprints/:id handlers so the
+    // literal "reset" path wins over the regex matcher.
+    svr.Post("/api/system/blueprints/reset", [](const httplib::Request&, httplib::Response& res) {
+        std::string err;
+        if (!writeDefaultBlueprint(&err)) {
+            res.status = 500;
+            nlohmann::json j;
+            j["error"] = err.empty() ? "failed to write default blueprint" : err;
+            res.set_content(j.dump(), "application/json");
+            return;
+        }
+        auto path = (fs::path(blueprintsDir()) /
+                     (std::string(kDefaultBlueprintId) + ".json")).string();
+        std::ifstream ifs(path);
+        auto bp = nlohmann::json::parse(ifs);
+        bp["id"] = kDefaultBlueprintId;
+        res.set_content(bp.dump(), "application/json");
+    });
+
+    // List blueprints. Auto-seeds the default blueprint if the user has
+    // wiped their blueprints dir since the last seed attempt this process;
+    // keeps the "no blueprints yet" empty state from ever showing on a
+    // fresh install.
     svr.Get("/api/system/blueprints", [](const httplib::Request&, httplib::Response& res) {
         auto dir = blueprintsDir();
+        auto defPath = (fs::path(dir) / (std::string(kDefaultBlueprintId) + ".json")).string();
+        if (!fs::exists(defPath)) {
+            writeDefaultBlueprint();
+        }
         nlohmann::json arr = nlohmann::json::array();
         if (fs::exists(dir)) {
             for (const auto& entry : fs::directory_iterator(dir)) {
@@ -86,6 +213,10 @@ void registerSystemRoutes(httplib::Server& svr, ServerContext ctx) {
             }
         }
         std::sort(arr.begin(), arr.end(), [](const nlohmann::json& a, const nlohmann::json& b) {
+            // Default pinned to top, then newest first.
+            bool aDef = a.value("id", "") == kDefaultBlueprintId;
+            bool bDef = b.value("id", "") == kDefaultBlueprintId;
+            if (aDef != bDef) return aDef;
             return a.value("updated_at", 0) > b.value("updated_at", 0);
         });
         res.set_content(arr.dump(), "application/json");

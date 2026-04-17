@@ -23,6 +23,24 @@ if command -v apt-get &>/dev/null; then
     fi
 fi
 
+# Re-bundle ui/ → src/server/EmbeddedAssets.hpp and
+# GROK_SYSTEM_PROMPT.md → src/server/DefaultSystemPrompt.hpp before CMake runs
+# so the compiled-in fallbacks stay in sync with their canonical sources.
+# CMake also wires both up as dependencies, but running them explicitly here
+# keeps things obvious when someone reads build.sh.
+if command -v python3 >/dev/null 2>&1; then
+    if [[ -f "${SCRIPT_DIR}/scripts/bundle-ui.py" ]]; then
+        echo ""
+        echo "Bundling ui/ → src/server/EmbeddedAssets.hpp..."
+        python3 "${SCRIPT_DIR}/scripts/bundle-ui.py"
+    fi
+    if [[ -f "${SCRIPT_DIR}/scripts/bundle-default-prompt.py" ]]; then
+        echo ""
+        echo "Bundling GROK_SYSTEM_PROMPT.md → src/server/DefaultSystemPrompt.hpp..."
+        python3 "${SCRIPT_DIR}/scripts/bundle-default-prompt.py"
+    fi
+fi
+
 # Create build dir
 mkdir -p "$BUILD_DIR"
 cd "$BUILD_DIR"

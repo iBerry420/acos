@@ -46,6 +46,18 @@ public:
 
     std::string proxyRawGet(const std::string& path, std::string& contentType);
 
+    // Transparent streaming POST: used by the node-proxy route to tunnel arbitrary
+    // requests (chat SSE, plain JSON, uploads) from an iframe showing the remote UI.
+    // onHeaders fires once as soon as the remote's status/content-type are known;
+    // onChunk fires repeatedly as bytes stream in. Returns true on a completed request.
+    using HeadersCallback = std::function<void(long status, const std::string& contentType)>;
+    bool proxyRawPost(const std::string& path,
+                      const std::string& body,
+                      const std::string& contentType,
+                      HeadersCallback onHeaders,
+                      SseCallback onChunk,
+                      std::atomic<bool>* cancelFlag = nullptr);
+
 private:
     struct HttpResult {
         long status = 0;

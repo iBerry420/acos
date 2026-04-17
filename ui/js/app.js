@@ -913,7 +913,8 @@ app.innerHTML=
 '<nav id="sidebar" class="sidebar'+(S.sidebarOpen?' open':'')+'">'+renderSidebar()+'</nav>'+
 '<div class="app-main-col">'+
 '<main id="main" class="main">'+renderPage()+'</main>'+
-'</div>';
+'</div>'+
+'<div class="remote-ui-overlay" id="remoteUiOverlay"></div>';
 updateStatusFooter();
 if(S.route==='/'||S.route==='/chat')setupChat();
 if(S.route==='/files')setupIdeAfterRender();
@@ -955,16 +956,58 @@ nav+='<a href="#'+lk.r+'" class="sb-link '+active+'" onclick="closeSidebar()">'+
 var stColor=S.status?'#4ade80':'#f87171';
 var stText=S.status?'Connected':'Unknown';
 var modelShort=S.model?(S.model.length>25?S.model.slice(0,25)+'...':S.model):'--';
-var connDot='<span class="status-dot online" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#4ade80;margin-right:4px"></span>Local';
 return '<div class="sb-head"><span class="sb-logo">Avacli</span><button class="sb-close" onclick="closeSidebar()">'+ic('xic',18)+'</button></div>'+
 '<div class="sb-nav">'+nav+'</div>'+
 '<div class="sb-foot">'+
 '<div>Model: <span title="'+esc(S.model)+'">'+esc(modelShort)+'</span></div>'+
-'<div>'+connDot+'</div>'+
+'<div id="sbChatTarget" class="sb-chat-target">'+renderChatTargetChip()+'</div>'+
 '<div>Status: <span style="color:'+stColor+'">'+ic('dot',8)+' '+stText+'</span></div>'+
 '<div id="sbFootMeta" class="sb-foot-meta"></div>'+
 '</div>';
 }
+
+function renderChatTargetChip(){
+var active=null;
+if(S.activeNodeId){
+for(var i=0;i<(S.nodesList||[]).length;i++){
+if(S.nodesList[i].id===S.activeNodeId){active=S.nodesList[i];break;}
+}
+}
+if(active){
+var latency=active.latency_ms>0?' &middot; '+active.latency_ms+'ms':'';
+var cls=active.status==='connected'?(active.latency_ms>500?'warning':'remote'):'offline';
+return '<div class="chat-target-chip remote" title="Chatting to remote node '+esc(active.label||active.ip)+'">'+
+'<span class="chat-target-dot '+cls+'"></span>'+
+'<span class="chat-target-arrow">'+ic('chevR',10)+'</span>'+
+'<span class="chat-target-label">'+esc(active.label||active.ip)+'</span>'+
+'<span class="chat-target-meta">'+esc(active.ip||'')+(latency||'')+'</span>'+
+'<button class="chat-target-clear" onclick="clearChatTarget()" title="Chat locally instead">'+ic('xic',10)+'</button>'+
+'</div>';
+}
+var ws=(S.status&&S.status.workspace)?String(S.status.workspace):'this node';
+if(ws.length>28)ws=ws.slice(0,26)+'…';
+return '<div class="chat-target-chip local" title="Chatting locally on this node">'+
+'<span class="chat-target-dot online"></span>'+
+'<span class="chat-target-label">Local</span>'+
+'<span class="chat-target-meta">'+esc(ws)+'</span>'+
+'</div>';
+}
+
+function updateChatTargetIndicator(){
+var el=document.getElementById('sbChatTarget');
+if(el)el.innerHTML=renderChatTargetChip();
+var input=document.querySelector('.chat-input');
+if(input)input.classList.toggle('chat-input-remote',!!S.activeNodeId);
+}
+window.updateChatTargetIndicator=updateChatTargetIndicator;
+
+window.clearChatTarget=function(){
+S.activeNodeId=null;
+var items=document.querySelectorAll('.node-item[data-node-id]');
+items.forEach(function(el){el.classList.remove('active');});
+updateChatTargetIndicator();
+toast('Chat target: Local','info');
+};
 
 function renderPage(){
 switch(S.route){
@@ -1080,7 +1123,6 @@ streamInfo+
 renderNodesPanel()+
 '</div>'+
 '<button class="nodes-toggle" onclick="toggleNodesPanel()" title="Nodes">'+ic('server',20)+'</button>'+
-'<div class="remote-ui-overlay" id="remoteUiOverlay"></div>'+
 '<div class="msg-actions" id="msgActions">'+
 '<button class="msg-action-btn" data-action="copy" title="Copy">'+ic('copy',14)+'</button>'+
 '<button class="msg-action-btn" data-action="exclude" title="Remove from context">'+ic('xic',14)+'</button>'+
@@ -1440,6 +1482,7 @@ var ta=document.getElementById('chatInput');
 if(ta){ta.focus();var draft=localStorage.getItem('ava_draft');if(draft){ta.value=draft;ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,150)+'px';}}
 scrollToBottom(true);setupMsgActions();renderMermaidBlocks();installChatResizeObserver();
 setupMentionPicker();
+updateChatTargetIndicator();
 if(!S.nodesLoaded)loadChatNodes();
 if(!window._wakeLockInstalled)initWakeLock();
 }
@@ -2449,6 +2492,8 @@ function loadChatNodes(){
 api('/api/nodes',{silent:true}).then(function(d){
 S.nodesList=(d&&d.nodes)?d.nodes:[];
 S.nodesLoaded=true;
+if(S.activeNodeId&&!S.nodesList.some(function(n){return n.id===S.activeNodeId;}))S.activeNodeId=null;
+updateChatTargetIndicator();
 var list=document.getElementById('nodesPanelList');
 if(list){
 var panel=document.getElementById('nodesPanel');
@@ -2469,6 +2514,14 @@ if(S.activeNodeId===id){S.activeNodeId=null;}
 else{S.activeNodeId=id;}
 var items=document.querySelectorAll('.node-item[data-node-id]');
 items.forEach(function(el){el.classList.toggle('active',el.getAttribute('data-node-id')===S.activeNodeId);});
+updateChatTargetIndicator();
+if(S.activeNodeId){
+var node=null;
+for(var i=0;i<S.nodesList.length;i++){if(S.nodesList[i].id===S.activeNodeId){node=S.nodesList[i];break;}}
+if(node)toast('Chat target: '+(node.label||node.ip),'info');
+}else{
+toast('Chat target: Local','info');
+}
 };
 
 window.toggleNodesPanel=function(){
@@ -2481,11 +2534,30 @@ if(tb)tb.classList.toggle('active',S.nodesPanelOpen);
 };
 
 /* ── @mention picker ─────────────────────────────────── */
+function buildMentionCandidates(query){
+var q=(query||'').toLowerCase();
+var out=[];
+var localLabel=(S.status&&S.status.workspace)?String(S.status.workspace):'this node';
+if(localLabel.length>32)localLabel=localLabel.slice(0,30)+'…';
+var localItem={kind:'local',id:'__local__',label:'Local',desc:localLabel};
+if(!q||'local'.indexOf(q)>=0||localLabel.toLowerCase().indexOf(q)>=0)out.push(localItem);
+for(var i=0;i<S.nodesList.length;i++){
+var n=S.nodesList[i];
+var lbl=(n.label||n.ip||'').toString();
+if(q&&lbl.toLowerCase().indexOf(q)<0)continue;
+out.push({kind:'node',id:n.id,label:lbl,status:n.status,latency_ms:n.latency_ms,ip:n.ip,ref:n});
+}
+if(!S.nodesList.length||!S.nodesList.some(function(n){return n.status==='connected';})){
+out.push({kind:'hint',id:'__hint__',label:'No remote nodes connected',desc:'Click to add one in Servers'});
+}
+return out;
+}
+
 function setupMentionPicker(){
 var inp=document.getElementById('chatInput');if(!inp)return;
 var popup=document.getElementById('mentionPopup');if(!popup)return;
 
-inp.addEventListener('input',function(){
+function refresh(){
 var val=inp.value;
 var cursor=inp.selectionStart;
 var before=val.substring(0,cursor);
@@ -2494,24 +2566,46 @@ var prevCh=atIdx>0?before.charAt(atIdx-1):'';
 if(atIdx<0||(prevCh!==' '&&prevCh!=='\n'&&prevCh!=='\t'&&atIdx!==0)){
 popup.classList.remove('show');S.mentionActive=false;return;
 }
-var query=before.substring(atIdx+1).toLowerCase();
-var connected=S.nodesList.filter(function(n){return n.status==='connected';});
-var matches=connected.filter(function(n){
-return (n.label||n.ip).toLowerCase().indexOf(query)>=0;
-});
+var query=before.substring(atIdx+1);
+if(/\s/.test(query)){popup.classList.remove('show');S.mentionActive=false;return;}
+var matches=buildMentionCandidates(query);
 if(!matches.length){popup.classList.remove('show');S.mentionActive=false;return;}
-S.mentionActive=true;S.mentionIdx=0;S.mentionMatches=matches;S.mentionAtIdx=atIdx;
+S.mentionActive=true;S.mentionMatches=matches;S.mentionAtIdx=atIdx;
+var firstSelectable=0;
+for(var i=0;i<matches.length;i++){if(matches[i].kind!=='hint'){firstSelectable=i;break;}}
+if(typeof S.mentionIdx!=='number'||S.mentionIdx>=matches.length||matches[S.mentionIdx].kind==='hint')S.mentionIdx=firstSelectable;
 renderMentionPopup();
-});
+}
+inp.addEventListener('input',refresh);
 inp.addEventListener('keydown',function(e){
 if(!S.mentionActive)return;
-if(e.key==='ArrowDown'){e.preventDefault();S.mentionIdx=Math.min(S.mentionIdx+1,S.mentionMatches.length-1);renderMentionPopup();}
-else if(e.key==='ArrowUp'){e.preventDefault();S.mentionIdx=Math.max(S.mentionIdx-1,0);renderMentionPopup();}
+if(e.key==='ArrowDown'){
+e.preventDefault();
+var next=S.mentionIdx;
+for(var i=0;i<S.mentionMatches.length;i++){
+next=(next+1)%S.mentionMatches.length;
+if(S.mentionMatches[next].kind!=='hint'){S.mentionIdx=next;break;}
+}
+renderMentionPopup();
+}
+else if(e.key==='ArrowUp'){
+e.preventDefault();
+var prev=S.mentionIdx;
+for(var i=0;i<S.mentionMatches.length;i++){
+prev=(prev-1+S.mentionMatches.length)%S.mentionMatches.length;
+if(S.mentionMatches[prev].kind!=='hint'){S.mentionIdx=prev;break;}
+}
+renderMentionPopup();
+}
 else if(e.key==='Enter'||e.key==='Tab'){
-if(S.mentionActive&&S.mentionMatches.length){e.preventDefault();insertMention(S.mentionMatches[S.mentionIdx]);}
+if(S.mentionActive&&S.mentionMatches.length){
+var pick=S.mentionMatches[S.mentionIdx];
+if(pick&&pick.kind!=='hint'){e.preventDefault();insertMention(pick);}
+}
 }
 else if(e.key==='Escape'){popup.classList.remove('show');S.mentionActive=false;}
 });
+S.mentionRefresh=refresh;
 }
 
 function renderMentionPopup(){
@@ -2520,10 +2614,29 @@ var h='';
 for(var i=0;i<S.mentionMatches.length;i++){
 var n=S.mentionMatches[i];
 var sel=i===S.mentionIdx?' selected':'';
-var dotCls=n.latency_ms>500?'warning':'online';
-h+='<div class="mention-item'+sel+'" onmousedown="insertMention(S.mentionMatches['+i+'])">';
+if(n.kind==='hint'){
+h+='<div class="mention-item mention-hint" onmousedown="event.preventDefault();closeMentionPopup();go(\'/servers\')">';
+h+='<div class="node-dot offline"></div>';
+h+='<span>'+esc(n.label)+'</span>';
+h+='<span class="mention-item-desc" style="margin-left:auto">'+esc(n.desc||'')+' '+ic('chevR',10)+'</span>';
+h+='</div>';
+continue;
+}
+if(n.kind==='local'){
+h+='<div class="mention-item'+sel+'" onmousedown="event.preventDefault();insertMention(S.mentionMatches['+i+'])">';
+h+='<div class="node-dot online"></div>';
+h+='<span>'+esc(n.label)+'</span>';
+h+='<span class="mention-item-desc" style="margin-left:auto;font-size:.6875rem;color:var(--text-muted)">'+esc(n.desc||'')+'</span>';
+h+='</div>';
+continue;
+}
+var dotCls='offline';
+if(n.status==='connected')dotCls=n.latency_ms>500?'warning':'online';
+else if(n.status==='testing')dotCls='testing';
+h+='<div class="mention-item'+sel+'" onmousedown="event.preventDefault();insertMention(S.mentionMatches['+i+'])">';
 h+='<div class="node-dot '+dotCls+'"></div>';
-h+='<span>'+esc(n.label||n.ip)+'</span>';
+h+='<span>'+esc(n.label)+'</span>';
+if(n.status&&n.status!=='connected')h+='<span style="font-size:.6875rem;color:var(--text-muted);margin-left:.25rem">('+esc(n.status)+')</span>';
 if(n.latency_ms>0)h+='<span style="font-size:.6875rem;color:var(--text-muted);margin-left:auto">'+n.latency_ms+'ms</span>';
 h+='</div>';
 }
@@ -2531,7 +2644,12 @@ popup.innerHTML=h;
 popup.classList.add('show');
 }
 
-window.insertMention=function(node){
+window.closeMentionPopup=function(){
+var popup=document.getElementById('mentionPopup');if(popup)popup.classList.remove('show');
+S.mentionActive=false;
+};
+
+window.insertMention=function(item){
 var inp=document.getElementById('chatInput');if(!inp)return;
 var popup=document.getElementById('mentionPopup');if(popup)popup.classList.remove('show');
 S.mentionActive=false;
@@ -2539,7 +2657,14 @@ var val=inp.value;
 var cursor=inp.selectionStart;
 var before=val.substring(0,S.mentionAtIdx);
 var after=val.substring(cursor);
-var label=(node.label||node.ip||'').trim();
+if(item&&item.kind==='local'){
+inp.value=before+after;
+inp.selectionStart=inp.selectionEnd=before.length;
+if(S.activeNodeId){S.activeNodeId=null;updateChatTargetIndicator();var items=document.querySelectorAll('.node-item[data-node-id]');items.forEach(function(el){el.classList.remove('active');});}
+inp.focus();
+return;
+}
+var label=(item.label||item.ip||'').trim();
 var tag='@'+label+' ';
 inp.value=before+tag+after;
 inp.selectionStart=inp.selectionEnd=before.length+tag.length;
@@ -3268,14 +3393,14 @@ if(logAutoScroll&&wasAtBottom){var c2=document.getElementById('logContainer');if
 }
 
 /* ── System Page ──────────────────────────────────────── */
-var sysState={prompt:'',blueprints:[],activeId:null,editing:false,nodes:[],edges:[],bpName:'',bpDesc:'',loaded:false,mermaidSrc:'',promptDirty:false,flowDirty:false,
+var sysState={prompt:'',promptIsDefault:false,blueprints:[],activeId:null,editing:false,nodes:[],edges:[],bpName:'',bpDesc:'',loaded:false,mermaidSrc:'',promptDirty:false,flowDirty:false,
 availableTools:null,availableModels:null,
 ab:{desc:'',selectedTools:{},modelAssignments:{},generating:false,result:null,showToolPicker:false,showModelPicker:false}
 };
 
 function loadSystemData(){
 api('/api/system/prompt',{silent:true}).then(function(d){
-sysState.prompt=d.prompt||'';sysState.loaded=true;
+sysState.prompt=d.prompt||'';sysState.promptIsDefault=!!d.is_default;sysState.loaded=true;
 if(!sysState.mermaidSrc&&sysState.prompt){
 sysState.mermaidSrc=generateFlowchartFromPrompt(sysState.prompt);
 }
@@ -3309,8 +3434,9 @@ h+='<div class="sys-grid">';
 
 // Left: Prompt editor
 h+='<div class="sys-panel sys-prompt-panel">';
-h+='<div class="sys-panel-head"><span>'+ic('edit',14)+' Active System Prompt</span>';
+h+='<div class="sys-panel-head"><span>'+ic('edit',14)+' Active System Prompt'+(sysState.promptIsDefault?' <span class="sys-bp-badge">Default (unsaved)</span>':'')+'</span>';
 h+='<div class="sys-panel-actions"><button class="sys-btn sys-btn-sm" onclick="sysGenMermaid()">'+ic('activity',12)+' Visualize</button>';
+h+='<button class="sys-btn sys-btn-sm" onclick="sysResetPrompt()" title="Overwrite with the shipped default">'+ic('refresh',12)+' Reset to Default</button>';
 h+='<button class="sys-btn sys-btn-primary sys-btn-sm" onclick="sysSavePrompt()">'+ic('save',12)+' Save</button></div></div>';
 h+='<textarea id="sysPromptEditor" class="sys-textarea" oninput="sysState.promptDirty=true" spellcheck="false">'+esc(sysState.prompt)+'</textarea>';
 h+='<div class="sys-prompt-meta"><span id="sysTokenEst">~'+Math.round((sysState.prompt||'').length/4)+' tokens</span>';
@@ -3546,8 +3672,18 @@ window.sysSavePrompt=function(){
 var ta=document.getElementById('sysPromptEditor');
 if(!ta)return;
 api('/api/system/prompt',{method:'POST',body:{prompt:ta.value}}).then(function(){
-sysState.prompt=ta.value;sysState.promptDirty=false;toast('System prompt saved','info');
+sysState.prompt=ta.value;sysState.promptDirty=false;sysState.promptIsDefault=false;toast('System prompt saved','info');
 }).catch(function(e){toast('Failed: '+e.message,'error');});
+};
+window.sysResetPrompt=function(){
+avaConfirm('Reset the system prompt to the shipped default? Your current prompt will be overwritten.',function(){
+api('/api/system/prompt/reset',{method:'POST'}).then(function(d){
+sysState.prompt=d.prompt||'';sysState.promptIsDefault=!!d.is_default;sysState.promptDirty=false;
+sysState.mermaidSrc=generateFlowchartFromPrompt(sysState.prompt);
+renderSystemInner();
+toast('System prompt reset to default','info');
+}).catch(function(e){toast('Failed: '+e.message,'error');});
+},{title:'Reset System Prompt',okText:'Reset',danger:true});
 };
 
 function generateFlowchartFromPrompt(text){
@@ -5098,13 +5234,13 @@ root.innerHTML=
 '<div class="deploy-section"><div class="deploy-section-title">Connection</div>'+
 '<div style="display:flex;flex-direction:column;gap:.75rem">'+
 '<div><label style="font-size:.75rem;color:var(--text-muted);display:block;margin-bottom:.25rem">Label</label><input class="deploy-input" id="nodeLabel" type="text" placeholder="my-server"></div>'+
-'<div><label style="font-size:.75rem;color:var(--text-muted);display:block;margin-bottom:.25rem">Host *</label><input class="deploy-input" id="nodeIp" type="text" placeholder="192.168.1.1 or node.example.com"></div>'+
-'<div><label style="font-size:.75rem;color:var(--text-muted);display:block;margin-bottom:.25rem">Port (default: 8080)</label><input class="deploy-input" id="nodePort" type="text" placeholder="8080" value="8080"></div>'+
+'<div><label style="font-size:.75rem;color:var(--text-muted);display:block;margin-bottom:.25rem">Host *</label><input class="deploy-input" id="nodeIp" type="text" placeholder="devacos.example.com or 192.168.1.1"><div style="font-size:.6875rem;color:var(--text-muted);margin-top:.25rem">Bare hostname/IP, or include <span style="font-family:var(--mono)">https://</span> to force TLS.</div></div>'+
+'<div><label style="font-size:.75rem;color:var(--text-muted);display:block;margin-bottom:.25rem">Port</label><input class="deploy-input" id="nodePort" type="text" placeholder="8080" value="8080"><div style="font-size:.6875rem;color:var(--text-muted);margin-top:.25rem"><span style="font-family:var(--mono)">8080</span> for direct avacli &middot; <span style="font-family:var(--mono)">80</span>/<span style="font-family:var(--mono)">443</span> for Apache/nginx-fronted (redirects are followed automatically).</div></div>'+
 '</div></div>'+
-'<div class="deploy-section"><div class="deploy-section-title">Authentication (optional)</div>'+
+'<div class="deploy-section"><div class="deploy-section-title">Authentication</div>'+
 '<div style="display:flex;flex-direction:column;gap:.75rem">'+
-'<div><label style="font-size:.75rem;color:var(--text-muted);display:block;margin-bottom:.25rem">Username</label><input class="deploy-input" id="nodeUsername" type="text" placeholder="admin" autocomplete="off"></div>'+
-'<div><label style="font-size:.75rem;color:var(--text-muted);display:block;margin-bottom:.25rem">Password</label><input class="deploy-input" id="nodePassword" type="password" placeholder="password" autocomplete="new-password"></div>'+
+'<div><label style="font-size:.75rem;color:var(--text-muted);display:block;margin-bottom:.25rem">Username <span style="color:var(--text-muted);font-weight:400">(optional, for display)</span></label><input class="deploy-input" id="nodeUsername" type="text" placeholder="admin" autocomplete="off"></div>'+
+'<div><label style="font-size:.75rem;color:var(--text-muted);display:block;margin-bottom:.25rem">Admin token</label><input class="deploy-input" id="nodePassword" type="password" placeholder="paste token from the target node" autocomplete="new-password"><div style="font-size:.6875rem;color:var(--text-muted);margin-top:.25rem">Copy from Settings → Admin Token on the remote node. Sent as <span style="font-family:var(--mono)">Authorization: Bearer &lt;token&gt;</span>.</div></div>'+
 '</div></div>'+
 '</div>'+
 '<div class="deploy-modal-foot">'+
@@ -5325,6 +5461,7 @@ api('/api/status',{silent:true}).then(function(d){
 if(!d)return;
 S.status=d;
 updateStatusFooter();
+updateChatTargetIndicator();
 var changed=false;
 if(d.model&&d.model!==S.model){
 S.model=d.model;

@@ -1,3 +1,213 @@
+## [2.3.4] — 2026-04-17
+
+**Remote-UI iframe: make the proxy actually transparent.**
+
+2.3.3 shipped with the Remote-UI overlay and the node-mesh chat hookup,
+but a user who installed 2.3.3 from apt and opened a remote node saw:
+
+1. The iframe rendered the remote's HTML shell, but the sidebar chip
+   and "Local" node entry inside the iframe showed the **client's**
+   workspace/path, not the remote's. User phrased this as *"the server
+   shows the servers host instead of the client host"*.
+2. Remote viewing showed the exact same workspace/chats/blueprints as
+   the local client — nothing felt "remote".
+3. Sending a chat message inside the iframe did nothing.
+
+Root cause was entirely in the proxy layer (`RoutesInfra.cpp` GET + POST
+handlers for `/api/nodes/:id/proxy/*`):
+
+- **URL rewriting only ran on `text/html` responses.** The remote's
+  `app.js` comes back as `application/javascript`, so the rewriter was
+  completely skipped. Every `fetch()`, `api()`, `XMLHttpRequest`,
+  `EventSource` call inside the iframe's JS resolved against the
+  iframe's own origin (the client), not the remote. The iframe was
+  effectively just the remote's HTML rendered over the client's data.
+- **Even on HTML, the rewriter was pattern-based** — it only caught
+  literal `fetch('/...')` / `fetch("/...")` / `src="/..."` /
+  `href="/..."`. The UI's helper is `api(path)` which does
+  `fetch(path, opts)` with a variable, so every single API call the
+  UI makes was invisible to the rewriter.
+- **The POST proxy buffered + JSON-parsed the upstream response.**
+  For `text/event-stream` (chat), this replaced the entire stream
+  with `{"error":"invalid JSON"}` after the libcurl timeout. Chat
+  never streamed a single token through the iframe.
+
+Fix has two parts, both server-side so the client just upgrades:
+
+**(a) Inject a tiny JS shim at the top of `<head>` in any proxied
+HTML.** It monkey-patches `window.fetch`, `XMLHttpRequest.prototype.open`,
+`window.EventSource`, and `window.WebSocket` so any absolute-path URL
+starting with `/` is transparently rewritten to `/api/nodes/:id/proxy<path>`.
+This runs before any other script on the page, so by the time the
+remote's `app.js` calls `api('/api/status')`, the wrapped `fetch`
+redirects it through the proxy automatically. The shim also shadows
+`window.localStorage` and `window.sessionStorage` with per-iframe
+in-memory stores, so the iframe's session/token state is isolated
+from the parent page (no accidental cross-contamination of
+`ava_last_session`, etc.), and seeds a dummy `avacli_token` so the
+remote UI starts "logged in" — the proxy route doesn't validate that
+forwarded token, it authenticates to the remote using the node's
+stored admin token on the server side.
+
+The old text-based `src=`/`href=` rewriter stays as a belt-and-suspenders
+fallback for no-JS paths (initial paint `<img>`, `<link rel>`, etc.).
+
+**(b) Make the POST proxy a true streaming passthrough.** New
+`NodeClient::proxyRawPost(path, body, contentType, onHeaders, onChunk)`
+runs curl in a worker thread, fires `onHeaders` on first byte with the
+upstream status + content-type, then fires `onChunk` for every chunk
+as it arrives. The route handler parks the caller in a
+`set_chunked_content_provider` loop fed by a lock+cv+queue, so SSE
+tokens reach the browser live instead of being buffered for 10+
+minutes and JSON-reparsed. The request `Content-Type` is also forwarded
+now (so multipart uploads through the proxy would work, not just JSON).
+
+Two small extras that fell out of the same diff:
+
+- Added `/api/health` sibling endpoint `/api/hostname` returning
+  `{"hostname": "<gethostname>"}` so a remote UI can show "you are on
+  host X" without needing to cross-reference the nodes table.
+- The GET + POST proxy routes now forward the querystring (`?foo=bar`)
+  to the remote — previously stripped, which broke pagination on
+  `/api/sessions`, `/api/logs`, etc.
+
+Deploy: out-of-tree via `BUILD_DIR=build-deploy` so the running devacos
+service (currently on 2.3.1) isn't replaced mid-session.
+
+---
+
+## [2.3.3] — 2026-04-17
+
+**UI: Remote UI button, `@` mention popup, and persistent chat-target indicator.**
+
+Three fixes to the node-mesh UX that only surfaced once people actually
+tried to use the feature end-to-end on a fresh apt install:
+
+1. **`Servers → Remote UI` did nothing.** The `<div id="remoteUiOverlay">`
+   host-element was only emitted inside `renderChat()`, so
+   `window.openRemoteUI()` would early-return on the Servers page
+   (`getElementById('remoteUiOverlay') === null`). Promoted the overlay
+   into the global `render()` app-shell so it's present on every route.
+   Clicking `Remote UI` from `/servers` now mounts the iframe as
+   expected; clicking again from the Nodes panel on `/chat` still works
+   unchanged (the CSS `position:fixed; inset:0` makes DOM parent
+   irrelevant).
+2. **`@` in chat never opened the picker.** `setupMentionPicker` only
+   rendered the popup if there were `status==='connected'` **remote**
+   matches. A fresh install has zero nodes, so typing `@` silently did
+   nothing and looked broken. Rewrote to always include a synthetic
+   `Local (this node)` entry at the top, plus a dashed hint item
+   *"No remote nodes connected — click to add one in Servers"* when the
+   user has no connected remotes. ArrowUp/Down skip the hint item;
+   selecting Local clears `S.activeNodeId` and strips the `@` fragment
+   from the textarea; selecting a remote inserts `@<label>` as before
+   (parsed per-message in `sendMsg`).
+3. **No indication of current chat target.** The sidebar foot had a
+   hardcoded `Local` badge that never reflected `S.activeNodeId`.
+   Replaced with a live `chat-target-chip` rendered by
+   `renderChatTargetChip()`:
+   - **Local state** (green dot, workspace path): chat goes to this
+     node.
+   - **Remote state** (purple dot, arrow, node label + ip/latency, ✕
+     button): chat is being proxied via `/api/nodes/<id>/chat` to the
+     selected node. The ✕ calls `clearChatTarget()` which drops
+     `S.activeNodeId` back to `null` and toasts confirmation.
+   The chip also renders on non-chat routes, so you always see where
+   chat will go. `updateChatTargetIndicator()` is invoked from
+   `onNodeClick`, `insertMention` (when Local is picked), the
+   `/api/status` poll, and `loadChatNodes` (which also scrubs a stale
+   `activeNodeId` if the target got removed). The chat-input gets a
+   subtle top-border accent (`chat-input-remote` class) while a remote
+   target is active, so it's obvious while typing.
+
+Deploy: bundled via `scripts/bundle-ui.py` → `EmbeddedAssets.hpp`, built
+**out-of-tree** (`BUILD_DIR=build-deploy`) so the running devacos binary
+at `/home/avalynnai_opensource/build/avacli` is not touched and systemd
+doesn't trigger `Restart=always`.
+
+---
+
+## [2.3.2] — 2026-04-17
+
+**P2P node mesh: fix "not avacli" when adding Apache/nginx-fronted nodes.**
+
+Symptoms: adding a node pointing at an avacli server that lives behind
+Apache (like `devacos.avalynn.ai`) with port 80 would mark the node as
+**"not avacli"** regardless of token. Root cause: `NodeClient` probes
+`/api/health` with libcurl, and the vhost 301-redirects `:80 → https://`.
+libcurl was never told to follow redirects, so `NodeClient::checkHealth`
+parsed the HTML redirect page as JSON, failed, and marked `isAvacli=false`.
+The token was never the issue — `/api/health` is public; the token only
+starts mattering once the node is marked `connected` and the client begins
+proxying `/api/chats`, `/api/system/blueprints`, `/api/apps`, etc. via
+`Authorization: Bearer <token>` (all of which already 401 on devacos
+without it).
+
+- **`src/client/NodeClient.cpp`** —
+  - `get()`, `post()`, `proxyChatStream()` now set `CURLOPT_FOLLOWLOCATION=1`
+    and `CURLOPT_MAXREDIRS=5`. POST variants additionally set
+    `CURLOPT_POSTREDIR = CURL_REDIR_POST_{301,302,303}` so the chat-stream
+    JSON body survives the http→https bounce (libcurl's default silently
+    downgrades POST→GET on 301/302). The `Authorization` header is attached
+    via `CURLOPT_HTTPHEADER` and libcurl retransmits it on same-host
+    redirects, so tokens still reach the upstream.
+  - `baseUrl()` rewritten to pick a scheme intelligently: honour an
+    explicit `http://`/`https://` prefix on the host field, default
+    `port=443 → https`, strip the default port from the canonical URL for
+    cleanliness and to keep the `Host:` header the upstream vhost expects.
+- **`ui/js/app.js`** — the Add Node modal now makes the port/scheme picker
+  self-explanatory: "8080 for direct avacli · 80/443 for Apache/nginx-fronted
+  (redirects are followed automatically)" and the password field is relabeled
+  "Admin token" with a hint that it's sent as `Authorization: Bearer`.
+  The `ui/` directory and the compiled-in fallback are re-bundled together
+  via the existing CMake `bundle-ui` step, so both on-disk and embedded UIs
+  match.
+
+The existing Remote UI overlay (chat → nodes panel → globe icon on a
+connected node → iframe at `/api/nodes/:id/proxy/`) already rewrites
+`src`/`href`/`fetch('/` back through the proxy, so once a node flips from
+`not_avacli → connected` its chat history, blueprints, tools and apps all
+become browseable from the local UI. Verified end-to-end against devacos:
+fresh 2.3.2 binary on port 9199 + host `devacos.avalynn.ai:80` →
+`status:"connected", latency_ms:67, version:"2.3.1"`, and
+`/api/nodes/:id/proxy/` returns devacos's full HTML with 4 rewritten proxy
+paths.
+
+---
+
+## [2.3.2-default-prompt] — 2026-04-17 (rolled into 2.3.2)
+
+**Ship a default system prompt + default blueprint out of the box.**
+
+Fresh apt installs had an empty System page — no system prompt, no
+blueprints, no reset target. Devacos works because its workspace ships
+`GROK_SYSTEM_PROMPT.md` on disk; clean installs had nothing.
+
+- **New `scripts/bundle-default-prompt.py`** bakes `GROK_SYSTEM_PROMPT.md` into a generated `src/server/DefaultSystemPrompt.hpp` header at build time (same pattern as `bundle-ui.py`). Exposes `getDefaultSystemPrompt()` and `getDefaultBlueprintJson()`.
+- **CMake custom command** regenerates the header whenever `GROK_SYSTEM_PROMPT.md` changes; `build.sh` and `packaging/deploy-to-packages.sh` also invoke it explicitly so the published `.deb` can never drift from the canonical markdown.
+- **`AgentEngine::buildUnifiedPrompt`** — the fallback used when no workspace `GROK_SYSTEM_PROMPT.md` exists is now the full baked-in default instead of a four-line skeleton, so the agent and the UI agree on what "default" means.
+- **`RoutesSystem.cpp`** —
+  - `GET /api/system/prompt` returns the embedded default (with `is_default: true`) when the workspace file is missing so the UI never shows an empty textarea.
+  - New `GET /api/system/prompt/default` for previewing the shipped default.
+  - New `POST /api/system/prompt/reset` overwrites `<workspace>/GROK_SYSTEM_PROMPT.md` with the embedded default.
+  - New `POST /api/system/blueprints/reset` restores `~/.avacli/blueprints/default.json` to the canonical "Default Coding Agent" blueprint.
+  - Server startup seeds `~/.avacli/blueprints/default.json` if missing; the blueprint list endpoint re-seeds on demand if the user wiped it, and always pins `default` to the top of the list.
+- **UI (`ui/js/app.js`)** — new "Reset to Default" button on the System page next to Save (confirm dialog, writes the embedded default and re-renders). The prompt editor now shows a "Default (unsaved)" badge when the UI is displaying the fallback.
+
+No behavior change for users who already have a workspace `GROK_SYSTEM_PROMPT.md` or a customized blueprints dir — existing files are untouched. Prompt and UI bundlers run independently; editing `GROK_SYSTEM_PROMPT.md` triggers a rebuild just like editing `ui/js/app.js` does.
+
+---
+
+## [2.3.1] — 2026-04-17
+
+**Packaging fix — prerm self-kill during apt upgrade.**
+
+- **`packaging/build-deb.sh`** — the `prerm` maintainer script used `pkill -f "avacli"` which, because `-f` matches against the full command line of every process, also matched `apt-get install avacli`, `dpkg --unpack .../avacli_*.deb`, and the prerm script's own invocation line. Running it SIGTERMed dpkg mid-unpack, leaving the package in "a very bad inconsistent state" (`Preparing to unpack … / Terminated`). Replaced with `pkill -x avacli` (exact argv[0] match, never matches dpkg/apt) and scoped to `remove|deconfigure` only — upgrades now rely on atomic file replacement so running instances keep executing the old inode until users restart. A new `postrm` stub is shipped for future purge-time cleanup.
+
+Embedded UI unchanged from 2.3.0.
+
+---
+
 ## [2.3.0] — 2026-04-16
 
 **xAI prompt-cache fixes, cached-token observability, sticky conversation routing, Responses-API chaining + reasoning preservation, and Batch API support (all five phases of `.planning/XAI_CACHE_AND_BATCH_PLAN.md`).**

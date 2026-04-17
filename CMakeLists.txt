@@ -57,6 +57,64 @@ find_package(OpenSSL REQUIRED)
 # System SQLite3
 find_package(SQLite3 REQUIRED)
 
+# Auto-regenerate src/server/EmbeddedAssets.hpp from ui/ before compiling.
+# ui/ is the canonical source; EmbeddedAssets.hpp is the compiled-in fallback
+# served when no on-disk UI exists (e.g. after a fresh apt install).
+# See scripts/bundle-ui.py.
+find_package(Python3 COMPONENTS Interpreter)
+set(AVACLI_UI_SOURCES
+  "${CMAKE_CURRENT_SOURCE_DIR}/ui/index.html"
+  "${CMAKE_CURRENT_SOURCE_DIR}/ui/css/variables.css"
+  "${CMAKE_CURRENT_SOURCE_DIR}/ui/css/style.css"
+  "${CMAKE_CURRENT_SOURCE_DIR}/ui/js/app.js"
+)
+set(AVACLI_EMBEDDED_ASSETS "${CMAKE_CURRENT_SOURCE_DIR}/src/server/EmbeddedAssets.hpp")
+if(Python3_Interpreter_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/bundle-ui.py")
+  add_custom_command(
+    OUTPUT "${AVACLI_EMBEDDED_ASSETS}"
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/bundle-ui.py"
+    DEPENDS ${AVACLI_UI_SOURCES}
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/bundle-ui.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/split_embedded_strings.py"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMENT "Bundling ui/ into EmbeddedAssets.hpp"
+    VERBATIM
+  )
+  add_custom_target(avacli_embedded_ui DEPENDS "${AVACLI_EMBEDDED_ASSETS}")
+else()
+  message(WARNING
+    "Python3 not found; EmbeddedAssets.hpp will NOT auto-regenerate from ui/. "
+    "Run scripts/bundle-ui.py manually after editing ui/ sources."
+  )
+endif()
+
+# Auto-regenerate src/server/DefaultSystemPrompt.hpp from GROK_SYSTEM_PROMPT.md
+# before compiling. Same pattern as the UI bundler: the markdown file is the
+# canonical source, the generated header is the compiled-in fallback used by
+# AgentEngine and the /api/system/prompt/{default,reset} routes.
+# See scripts/bundle-default-prompt.py.
+set(AVACLI_DEFAULT_PROMPT_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/src/server/DefaultSystemPrompt.hpp")
+if(Python3_Interpreter_FOUND AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/bundle-default-prompt.py")
+  add_custom_command(
+    OUTPUT "${AVACLI_DEFAULT_PROMPT_HEADER}"
+    COMMAND "${Python3_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/bundle-default-prompt.py"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/GROK_SYSTEM_PROMPT.md"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/bundle-default-prompt.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/split_embedded_strings.py"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    COMMENT "Bundling GROK_SYSTEM_PROMPT.md into DefaultSystemPrompt.hpp"
+    VERBATIM
+  )
+  add_custom_target(avacli_default_prompt DEPENDS "${AVACLI_DEFAULT_PROMPT_HEADER}")
+else()
+  message(WARNING
+    "Python3 not found; DefaultSystemPrompt.hpp will NOT auto-regenerate. "
+    "Run scripts/bundle-default-prompt.py manually after editing GROK_SYSTEM_PROMPT.md."
+  )
+endif()
+
 # Source files
 # Build id for /api/status (git short hash when available)
 set(AVACLI_BUILD_ID "unknown")
@@ -136,6 +194,13 @@ set(SOURCES
 )
 
 add_executable(avacli ${SOURCES})
+
+if(TARGET avacli_embedded_ui)
+  add_dependencies(avacli avacli_embedded_ui)
+endif()
+if(TARGET avacli_default_prompt)
+  add_dependencies(avacli avacli_default_prompt)
+endif()
 
 target_include_directories(avacli PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src

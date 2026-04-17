@@ -7,12 +7,30 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 VERSION="${1:?usage: $0 <version> [REPO_ROOT]}"
 REPO_ROOT="${2:-/var/www/packages.avalynn.ai}"
 
-cd "$PROJECT_DIR"
-mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . -j"$(nproc)"
+# BUILD_DIR defaults to an out-of-tree directory so that running this script
+# on a host where avacli is live (e.g. devacos) does NOT overwrite the
+# in-use `$PROJECT_DIR/build/avacli` binary. Writing over the live binary
+# triggers systemd's `Restart=always` and kicks the service mid-deploy.
+# Override with `BUILD_DIR=/path/to/build` if you want to reuse an existing tree.
+BUILD_DIR="${BUILD_DIR:-$PROJECT_DIR/build-deploy}"
 
-BINARY="$PROJECT_DIR/build/avacli"
+cd "$PROJECT_DIR"
+
+# Re-bundle ui/ into src/server/EmbeddedAssets.hpp and
+# GROK_SYSTEM_PROMPT.md into src/server/DefaultSystemPrompt.hpp so the
+# compiled-in fallbacks match the canonical on-disk sources used by devacos.
+# CMake also does this during the build, but we run them explicitly here
+# so the published .deb can never drift from the canonical sources.
+if command -v python3 >/dev/null 2>&1; then
+    [[ -f scripts/bundle-ui.py ]] && python3 scripts/bundle-ui.py
+    [[ -f scripts/bundle-default-prompt.py ]] && python3 scripts/bundle-default-prompt.py
+fi
+
+mkdir -p "$BUILD_DIR"
+cmake -S "$PROJECT_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release
+cmake --build "$BUILD_DIR" -j"$(nproc)" --target avacli
+
+BINARY="$BUILD_DIR/avacli"
 if [[ ! -f "$BINARY" ]]; then
     echo "Build failed: missing $BINARY"
     exit 1

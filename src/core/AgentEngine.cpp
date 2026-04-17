@@ -1,6 +1,7 @@
 #include "core/AgentEngine.hpp"
 #include "client/XAIClient.hpp"
 #include "config/ModelRegistry.hpp"
+#include "server/DefaultSystemPrompt.hpp"
 #include "tools/ProjectNotes.hpp"
 #include "tools/ToolRegistry.hpp"
 #include <nlohmann/json.hpp>
@@ -208,14 +209,11 @@ std::string buildUnifiedPrompt(const std::string& workspace) {
         return fromFile + "\n\n## Environment\n- Workspace: " + workspace + "\n";
     }
 
-    /* Fallback: embedded prompt used when GROK_SYSTEM_PROMPT.md is not found */
-    return std::string(R"(You are Grok, an AI coding assistant powered by xAI. You help users with software engineering tasks. You have full access to the workspace and all tools at all times.
-
-## Environment
-- Workspace: )") + workspace + R"(
-- You have tools for reading, writing, and searching files, running shell commands, and searching the web.
-- You operate autonomously. When the user asks you to do something, do it. Don't ask for permission to use tools.
-)";
+    /* Fallback: full embedded default (baked in from GROK_SYSTEM_PROMPT.md) */
+    /* when the workspace has no GROK_SYSTEM_PROMPT.md on disk. Keeps agent */
+    /* and UI in perfect agreement on what "default" means. */
+    return getDefaultSystemPrompt() +
+           "\n\n## Environment\n- Workspace: " + workspace + "\n";
 }
 
 /// Convert chat-completions-style messages to Responses API `input` array.
